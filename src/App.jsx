@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 import { supabase, registrarAuditoria } from "./supabaseClient.js";
 import Login from "./Login.jsx";
 import Cotizador from "./Cotizador.jsx";
@@ -72,15 +73,28 @@ export default function App() {
 
   if (cargando) {
     return (
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#3d5064", fontFamily: "sans-serif" }}>
-        Cargando…
-      </div>
+      <>
+        <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#3d5064", fontFamily: "sans-serif" }}>
+          Cargando…
+        </div>
+        <SpeedInsights />
+      </>
     );
   }
 
   if (!sesion || !perfil) {
-    return <Login mensajeInicial={mensajeLogin} />;
+    return (
+      <>
+        <Login mensajeInicial={mensajeLogin} />
+        <SpeedInsights />
+      </>
+    );
   }
 
-  return <Cotizador perfil={perfil} />;
+  return (
+    <>
+      <Cotizador perfil={perfil} />
+      <SpeedInsights />
+    </>
+  );
 }
