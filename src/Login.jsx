@@ -3,7 +3,7 @@ import { LogIn, AlertCircle } from "lucide-react";
 import { LOGO_DATA_URI } from "./logo.js";
 import { supabase } from "./supabaseClient.js";
 
-export default function Login({ mensajeInicial }) {
+export default function Login({ mensajeInicial, onRegistrarse }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [cargando, setCargando] = useState(false);
@@ -89,7 +89,15 @@ export default function Login({ mensajeInicial }) {
           </button>
         </form>
         <p style={{ fontSize: 12, color: "#6b7280", textAlign: "center", marginTop: 16 }}>
-          ¿No tienes cuenta? Pídele acceso al administrador de la plataforma.
+          ¿No tienes cuenta?{" "}
+          <button
+            type="button"
+            onClick={onRegistrarse}
+            style={{ background: "none", border: "none", padding: 0, color: "#a9782e", textDecoration: "underline", cursor: "pointer", font: "inherit" }}
+          >
+            Regístrate
+          </button>
+          . Un administrador deberá activarla.
         </p>
       </div>
       <div className="qf-login-footer">Desarrollado por Grupo D'Brians SRL</div>

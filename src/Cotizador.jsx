@@ -199,11 +199,8 @@ export default function Cotizador({ perfil }) {
   // Administración de usuarios (solo visible/operable para administradores)
   const [usuarios, setUsuarios] = useState([]);
   const [usuariosCargando, setUsuariosCargando] = useState(false);
-  const [nuevoUsuarioEmail, setNuevoUsuarioEmail] = useState("");
-  const [nuevoUsuarioPassword, setNuevoUsuarioPassword] = useState("");
   const [usuariosNota, setUsuariosNota] = useState("");
   const [usuariosError, setUsuariosError] = useState("");
-  const [creandoUsuario, setCreandoUsuario] = useState(false);
 
   // Auditoría
   const [auditoria, setAuditoria] = useState([]);
@@ -545,40 +542,35 @@ Grupo D'Brians SRL
     setUsuariosCargando(false);
   }
 
-  async function crearUsuario(e) {
-    e.preventDefault();
+  // Activar/desactivar se hace directo contra Supabase (protegido por la
+  // política de RLS "perfiles: admin activo puede actualizar" y por el
+  // trigger que protege al administrador) — no depende de ninguna función
+  // de servidor, así que no puede fallar por variables de entorno mal
+  // configuradas ahí.
+  async function cambiarEstadoUsuario(u, activar) {
     setUsuariosError("");
     setUsuariosNota("");
-    if (!nuevoUsuarioEmail.trim() || !nuevoUsuarioPassword) {
-      setUsuariosError("Ingresa el correo y la contraseña del nuevo usuario.");
-      return;
-    }
-    if (nuevoUsuarioPassword.length < 8) {
-      setUsuariosError("La contraseña debe tener al menos 8 caracteres.");
-      return;
-    }
-    setCreandoUsuario(true);
     try {
-      const { data: sesionActual } = await supabase.auth.getSession();
-      const token = sesionActual?.session?.access_token;
-      const resp = await fetch("/api/admin-crear-usuario", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ email: nuevoUsuarioEmail.trim(), password: nuevoUsuarioPassword }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || "No se pudo crear el usuario");
-      setUsuariosNota(`Usuario ${nuevoUsuarioEmail.trim()} creado correctamente.`);
-      setNuevoUsuarioEmail("");
-      setNuevoUsuarioPassword("");
+      const { error } = await supabase.from("perfiles").update({ activo: activar }).eq("id", u.id);
+      if (error) throw error;
+      await registrarAuditoria(
+        perfil.email,
+        activar ? "usuario_activado" : "usuario_desactivado",
+        `${activar ? "Activó" : "Desactivó"} la cuenta de ${u.email}`
+      );
+      setUsuariosNota(`${u.email} quedó ${activar ? "activo" : "desactivado"}.`);
       cargarUsuarios();
     } catch (e) {
-      setUsuariosError(e.message || "No se pudo crear el usuario.");
+      setUsuariosError(e.message || "No se pudo completar la acción.");
     }
-    setCreandoUsuario(false);
   }
 
-  async function gestionarUsuario(usuarioId, accion) {
+  // Eliminar sí necesita borrar la cuenta de Supabase Auth, lo cual solo se
+  // puede hacer con la service role key desde el servidor — por eso esta
+  // acción sigue pasando por /api/admin-gestionar-usuario. Si prefieres no
+  // depender de esa función, usa "Desactivar" en su lugar: revoca el acceso
+  // igual de bien y queda registrado en la auditoría.
+  async function eliminarUsuario(u) {
     setUsuariosError("");
     setUsuariosNota("");
     try {
@@ -587,14 +579,14 @@ Grupo D'Brians SRL
       const resp = await fetch("/api/admin-gestionar-usuario", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ usuarioId, accion }),
+        body: JSON.stringify({ usuarioId: u.id, accion: "eliminar" }),
       });
       const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || "No se pudo completar la acción");
-      setUsuariosNota("Listo.");
+      if (!resp.ok) throw new Error(data.error || "No se pudo eliminar el usuario");
+      setUsuariosNota("Usuario eliminado.");
       cargarUsuarios();
     } catch (e) {
-      setUsuariosError(e.message || "No se pudo completar la acción.");
+      setUsuariosError(e.message || "No se pudo eliminar el usuario.");
     }
   }
 
@@ -1336,29 +1328,19 @@ Grupo D'Brians SRL
         {view === "usuarios" && esAdmin && (
           <div>
             <div className="cot-card">
-              <h2><UserPlus size={16} /> Crear nuevo usuario</h2>
-              <form onSubmit={crearUsuario}>
-                <div className="cot-row cols-2">
-                  <div className="cot-field">
-                    <label>Correo</label>
-                    <input type="email" value={nuevoUsuarioEmail} onChange={(e) => setNuevoUsuarioEmail(e.target.value)} placeholder="correo@grupodbrians.com" />
-                  </div>
-                  <div className="cot-field">
-                    <label>Contraseña (mínimo 8 caracteres)</label>
-                    <input type="password" value={nuevoUsuarioPassword} onChange={(e) => setNuevoUsuarioPassword(e.target.value)} />
-                  </div>
-                </div>
-                <button className="cot-primary-btn" type="submit" disabled={creandoUsuario}>
-                  <UserPlus size={15} /> {creandoUsuario ? "Creando…" : "Crear usuario"}
-                </button>
-              </form>
-              {usuariosError && <div className="cot-error-box" style={{ marginTop: 12 }}>{usuariosError}</div>}
-              {usuariosNota && (
-                <div className="cot-error-box" style={{ marginTop: 12, background: "#e6f2ee", borderColor: "#9cc7ba", color: "var(--teal-ink)" }}>
-                  <CheckCircle2 size={14} style={{ verticalAlign: "-2px", marginRight: 6 }} />{usuariosNota}
-                </div>
-              )}
+              <h2><UserPlus size={16} /> Cuentas del equipo</h2>
+              <p style={{ fontSize: 13, color: "var(--ink-soft)", margin: "0 0 4px" }}>
+                Cada persona crea su propia cuenta desde "Regístrate" en la pantalla de acceso.
+                Aparece aquí como <strong>pendiente</strong> hasta que la actives.
+              </p>
             </div>
+
+            {usuariosError && <div className="cot-error-box" style={{ marginBottom: 14 }}>{usuariosError}</div>}
+            {usuariosNota && (
+              <div className="cot-error-box" style={{ marginBottom: 14, background: "#e6f2ee", borderColor: "#9cc7ba", color: "var(--teal-ink)" }}>
+                <CheckCircle2 size={14} style={{ verticalAlign: "-2px", marginRight: 6 }} />{usuariosNota}
+              </div>
+            )}
 
             <div className="cot-toolbar">
               <button className="cot-secondary-btn" onClick={cargarUsuarios}><RefreshCw size={15} /> Actualizar lista</button>
@@ -1367,25 +1349,26 @@ Grupo D'Brians SRL
             {!usuariosCargando && usuarios.map((u) => (
               <div className="cot-history-item" key={u.id}>
                 <div>
-                  <strong>{u.email}</strong>
+                  <strong>{u.nombre ? `${u.nombre} — ${u.email}` : u.email}</strong>
                   <div style={{ fontSize: 12, color: "var(--ink-soft)" }}>
-                    {u.rol === "admin" ? "Administrador" : "Usuario"} · {u.activo ? "Activo" : "Desactivado"}
+                    {u.rol === "admin" ? "Administrador" : "Usuario"} ·{" "}
+                    {u.activo ? "Activo" : "Pendiente de activación / desactivado"}
                   </div>
                 </div>
                 {u.rol !== "admin" && (
                   <div style={{ display: "flex", gap: 8 }}>
                     {u.activo ? (
-                      <button className="cot-secondary-btn" style={{ padding: "6px 10px" }} onClick={() => gestionarUsuario(u.id, "desactivar")}>
+                      <button className="cot-secondary-btn" style={{ padding: "6px 10px" }} onClick={() => cambiarEstadoUsuario(u, false)}>
                         <Ban size={13} /> Desactivar
                       </button>
                     ) : (
-                      <button className="cot-secondary-btn" style={{ padding: "6px 10px" }} onClick={() => gestionarUsuario(u.id, "activar")}>
+                      <button className="cot-secondary-btn" style={{ padding: "6px 10px" }} onClick={() => cambiarEstadoUsuario(u, true)}>
                         <UserCheck2 size={13} /> Activar
                       </button>
                     )}
                     <button
                       className="cot-iconbtn"
-                      onClick={() => { if (window.confirm(`¿Eliminar la cuenta de ${u.email}? Esta acción no se puede deshacer.`)) gestionarUsuario(u.id, "eliminar"); }}
+                      onClick={() => { if (window.confirm(`¿Eliminar la cuenta de ${u.email}? Esta acción no se puede deshacer.`)) eliminarUsuario(u); }}
                     >
                       <Trash size={14} />
                     </button>
@@ -1427,3 +1410,4 @@ Grupo D'Brians SRL
     </div>
   );
 }
+

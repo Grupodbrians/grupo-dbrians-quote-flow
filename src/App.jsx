@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { supabase, registrarAuditoria } from "./supabaseClient.js";
 import Login from "./Login.jsx";
+import Registro from "./Registro.jsx";
 import Cotizador from "./Cotizador.jsx";
 
 export default function App() {
@@ -8,6 +9,7 @@ export default function App() {
   const [sesion, setSesion] = useState(null);
   const [perfil, setPerfil] = useState(null);
   const [mensajeLogin, setMensajeLogin] = useState("");
+  const [vista, setVista] = useState("login"); // "login" | "registro"
 
   async function cargarPerfil(uid) {
     const { data } = await supabase.from("perfiles").select("*").eq("id", uid).maybeSingle();
@@ -27,7 +29,7 @@ export default function App() {
           setMensajeLogin(
             !p
               ? "Tu cuenta no tiene un perfil asignado. Contacta al administrador."
-              : "Tu cuenta está desactivada. Contacta al administrador."
+              : "Tu cuenta está pendiente de activación (o fue desactivada). Contacta al administrador."
           );
           await supabase.auth.signOut();
         } else {
@@ -49,7 +51,7 @@ export default function App() {
         setMensajeLogin(
           !p
             ? "Tu cuenta no tiene un perfil asignado. Contacta al administrador."
-            : "Tu cuenta está desactivada. Contacta al administrador."
+            : "Tu cuenta está pendiente de activación (o fue desactivada). Contacta al administrador."
         );
         await supabase.auth.signOut();
         setSesion(null);
@@ -79,7 +81,10 @@ export default function App() {
   }
 
   if (!sesion || !perfil) {
-    return <Login mensajeInicial={mensajeLogin} />;
+    if (vista === "registro") {
+      return <Registro onVolver={() => setVista("login")} />;
+    }
+    return <Login mensajeInicial={mensajeLogin} onRegistrarse={() => setVista("registro")} />;
   }
 
   return <Cotizador perfil={perfil} />;
