@@ -24,45 +24,12 @@ import {
   construirMensajeWhatsApp as construirMensajeWhatsAppUtil,
   abrirWhatsApp as abrirWhatsAppUtil,
 } from "./cotizador/utils/whatsapp.js";
+import { generarPDFCliente as generarPDFClienteUtil } from "./cotizador/utils/pdf.js";
 
 function genNumeroCotizacion() {
   const d = new Date();
   const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
   return `COT-${ymd}-${Math.floor(1000 + Math.random() * 9000)}`;
-}
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",")[1]);
-    reader.onerror = () => reject(new Error("No se pudo leer el archivo"));
-    reader.readAsDataURL(file);
-  });
-}
-
-function cargarScript(src, yaCargado) {
-  return new Promise((resolve, reject) => {
-    if (yaCargado()) { resolve(); return; }
-    const existente = document.querySelector(`script[data-cot-src="${src}"]`);
-    if (existente) {
-      existente.addEventListener("load", () => resolve());
-      existente.addEventListener("error", () => reject(new Error("No se pudo cargar " + src)));
-      return;
-    }
-    const s = document.createElement("script");
-    s.src = src;
-    s.dataset.cotSrc = src;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error("No se pudo cargar " + src));
-    document.body.appendChild(s);
-  });
-}
-
-function cargarLibreriasPDF() {
-  return Promise.all([
-    cargarScript("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js", () => !!window.html2canvas),
-    cargarScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js", () => !!(window.jspdf && window.jspdf.jsPDF)),
-  ]);
 }
 
 export default function Cotizador({ perfil }) {
@@ -244,57 +211,19 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
   }
 
 
+  // Envoltorio de una línea: misma firma sin argumentos que antes, así el
+  // botón (onClick={generarPDFCliente}) y la auto-descarga desde Historial no
+  // necesitan ningún cambio. La lógica real vive ahora en
+  // cotizador/utils/pdf.js (Sub-paso 3). clienteDocRef sigue viviendo aquí
+  // porque pertenece al JSX (línea del <div ref={clienteDocRef}>).
   async function generarPDFCliente() {
-    setPdfError("");
-    setPdfGenerado(false);
-    setGenerandoPDF(true);
-    try {
-      await cargarLibreriasPDF();
-      const { jsPDF } = window.jspdf;
-      const nodo = clienteDocRef.current;
-
-      const canvas = await window.html2canvas(nodo, { scale: 3, useCORS: true, backgroundColor: "#ffffff" });
-      const imgData = canvas.toDataURL("image/png");
-
-      const pdf = new jsPDF({ unit: "pt", format: "letter", orientation: "portrait" });
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      const margen = 24;
-      const imgWidth = pageWidth - margen * 2;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      const alturaUtil = pageHeight - margen * 2;
-
-      let restante = imgHeight;
-      let offset = 0;
-      pdf.addImage(imgData, "PNG", margen, margen, imgWidth, imgHeight);
-      restante -= alturaUtil;
-      while (restante > 0) {
-        offset -= alturaUtil;
-        pdf.addPage();
-        pdf.addImage(imgData, "PNG", margen, offset + margen, imgWidth, imgHeight);
-        restante -= alturaUtil;
-      }
-
-      // Se entrega como data: URI (no blob:) para no chocar con el mismo CSP que bloqueó html2pdf.
-      const dataUri = pdf.output("datauristring");
-      const nombreArchivo = `Cotizacion-${numeroCotizacion}.pdf`;
-      const enlace = document.createElement("a");
-      enlace.href = dataUri;
-      enlace.download = nombreArchivo;
-      document.body.appendChild(enlace);
-      enlace.click();
-      document.body.removeChild(enlace);
-
-      setPdfGenerado(true);
-      setGenerandoPDF(false);
-      return true;
-    } catch (e) {
-      console.error("Error generando PDF:", e);
-      setPdfGenerado(false);
-      setGenerandoPDF(false);
-      setPdfError("El entorno de la aplicación está bloqueando la descarga automática del PDF. Usa \"Imprimir\" → Guardar como PDF como alternativa.");
-      return false;
-    }
+    return generarPDFClienteUtil({
+      nodo: clienteDocRef.current,
+      numeroCotizacion,
+      setPdfError,
+      setPdfGenerado,
+      setGenerandoPDF,
+    });
   }
 
   // Envoltorios de una línea: misma firma sin argumentos que antes, así el
