@@ -18,49 +18,12 @@ const PAYMENT_METHODS = [
   "Otro",
 ];
 
-function uid() {
-  return Math.random().toString(36).slice(2, 10);
-}
-
-function fmtUSD(n) {
-  const v = Number.isFinite(n) ? n : 0;
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(v);
-}
-
-function fmtMoneda(n, code) {
-  const v = Number.isFinite(n) ? n : 0;
-  try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: code || "USD" }).format(v);
-  } catch (e) {
-    return `${code || ""} ${v.toFixed(2)}`;
-  }
-}
-
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function addDaysISO(days) {
-  const d = new Date();
-  d.setDate(d.getDate() + Number(days || 0));
-  return d.toISOString().slice(0, 10);
-}
-
-function fmtFechaLegible(iso) {
-  try {
-    const [y, m, d] = String(iso).split("-").map(Number);
-    return `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${y}`;
-  } catch (e) {
-    return iso;
-  }
-}
-
-function telefonoParaWhatsApp(telefono) {
-  const digits = String(telefono || "").replace(/\D/g, "");
-  if (!digits) return "";
-  if (digits.length === 10) return `1${digits}`;
-  return digits;
-}
+import { uid, fmtUSD, fmtMoneda, todayISO, addDaysISO, fmtFechaLegible } from "./cotizador/utils/formato.js";
+import { emptyItem, defaultCliente, computeQuote } from "./cotizador/utils/calculos.js";
+import {
+  construirMensajeWhatsApp as construirMensajeWhatsAppUtil,
+  abrirWhatsApp as abrirWhatsAppUtil,
+} from "./cotizador/utils/whatsapp.js";
 
 function genNumeroCotizacion() {
   const d = new Date();
@@ -100,67 +63,6 @@ function cargarLibreriasPDF() {
     cargarScript("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js", () => !!window.html2canvas),
     cargarScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js", () => !!(window.jspdf && window.jspdf.jsPDF)),
   ]);
-}
-
-function emptyItem() {
-  return { id: uid(), descripcion: "", cantidad: 1, precioUnitario: 0, moneda: "DOP" };
-}
-
-function defaultCliente() {
-  return {
-    nombre: "",
-    telefono: "",
-    direccion: "",
-    metodoPago: "Transferencia bancaria",
-    metodoPagoOtro: "",
-    condiciones: "Precios cotizados sujetos a disponibilidad del proveedor. No incluye costos no especificados en este documento.",
-    vigenciaDias: 15,
-  };
-}
-
-function computeQuote({ items, tasas, logistica, margenUSD, impuestos }) {
-  const itemsCalc = items.map((it) => {
-    const tasa = it.moneda === "USD" ? 1 : Number(tasas[it.moneda]) || 0;
-    const precioUnitUSD = tasa > 0 ? Number(it.precioUnitario || 0) / tasa : 0;
-    const totalProveedorUSD = precioUnitUSD * Number(it.cantidad || 0);
-    return { ...it, tasa, precioUnitUSD, totalProveedorUSD };
-  });
-
-  const subtotalProveedor = itemsCalc.reduce((s, it) => s + it.totalProveedorUSD, 0);
-  const margenCadaProducto = Number(margenUSD || 0);
-  const margenTotal = margenCadaProducto * itemsCalc.length;
-
-  const tasaDOP = Number(tasas.DOP) || 0;
-  const logisticaTotal = tasaDOP > 0 ? Number(logistica.valorDOP || 0) / tasaDOP : 0;
-
-  const subtotalCliente = subtotalProveedor + logisticaTotal + margenTotal;
-
-  const itemsFinal = itemsCalc.map((it) => {
-    const share = subtotalProveedor > 0 ? it.totalProveedorUSD / subtotalProveedor : 1 / Math.max(itemsCalc.length, 1);
-    const logisticaItem = logisticaTotal * share;
-    const margenItem = margenCadaProducto;
-    const totalFinalItem = it.totalProveedorUSD + logisticaItem + margenItem;
-    const precioUnitFinal = Number(it.cantidad || 0) > 0 ? totalFinalItem / Number(it.cantidad) : 0;
-    return { ...it, logisticaItem, margenItem, totalFinalItem, precioUnitFinal };
-  });
-
-  const impuestosCalc = impuestos
-    .filter((t) => t.activo)
-    .map((t) => ({ ...t, monto: subtotalCliente * (Number(t.porcentaje || 0) / 100) }));
-  const impuestosTotal = impuestosCalc.reduce((s, t) => s + t.monto, 0);
-
-  const total = subtotalCliente + impuestosTotal;
-
-  return {
-    itemsFinal,
-    subtotalProveedor,
-    logisticaTotal,
-    margenTotal,
-    subtotalCliente,
-    impuestosCalc,
-    impuestosTotal,
-    total,
-  };
 }
 
 export default function Cotizador({ perfil }) {
@@ -395,62 +297,15 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
     }
   }
 
+  // Envoltorios de una línea: misma firma sin argumentos que antes, así el
+  // JSX (onClick={abrirWhatsApp}) no necesita ningún cambio. La lógica real
+  // vive ahora en cotizador/utils/whatsapp.js (Sub-paso 2).
   function construirMensajeWhatsApp() {
-    const totalTexto = Number(quote.total || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return `Hola, ${cliente.nombre} 👋
-
-Reciba un cordial saludo de parte de Grupo D'Brians SRL.
-
-Adjunto encontrará la cotización No. ${numeroCotizacion}, preparada de acuerdo con su solicitud.
-
-📋 Cotización: ${numeroCotizacion}
-📅 Fecha: ${fmtFechaLegible(fecha)}
-⏳ Vigencia: ${fmtFechaLegible(addDaysISO(cliente.vigenciaDias))}
-
-💰 Total de la cotización: USD ${totalTexto}
-
-La propuesta contiene el detalle de los productos/servicios solicitados, cantidades, precios y condiciones comerciales correspondientes.
-
-Quedamos atentos a cualquier consulta, modificación o confirmación de su pedido.
-
-Será un placer atenderle.
-
-Saludos cordiales,
-Grupo D'Brians SRL
-📞 +1 829-664-2424
-📧 info@grupodbrians.com
-🌐 www.grupodbrians.com`;
+    return construirMensajeWhatsAppUtil({ cliente, numeroCotizacion, fecha, total: quote.total });
   }
 
   function abrirWhatsApp() {
-    setWaError("");
-    setWaNote("");
-
-    if (!cliente.nombre.trim()) {
-      setWaError("Debes registrar el nombre del cliente antes de enviar la cotización.");
-      return;
-    }
-    if (!cliente.telefono.trim()) {
-      setWaError("Para enviar la cotización por WhatsApp debes registrar el número de teléfono del cliente.");
-      return;
-    }
-    if (!numeroCotizacion || !Number.isFinite(quote.total) || quote.total <= 0) {
-      setWaError("La cotización todavía no está calculada. Vuelve a \"Datos\" y genera la cotización primero.");
-      return;
-    }
-    const telefono = telefonoParaWhatsApp(cliente.telefono);
-    if (!telefono) {
-      setWaError("El número de teléfono del cliente no es válido.");
-      return;
-    }
-
-    // Sin ningún "await" antes de window.open: se ejecuta en el mismo clic del
-    // usuario, así el navegador nunca lo trata como pop-up y no lo bloquea.
-    const mensaje = construirMensajeWhatsApp();
-    const url = `https://wa.me/${telefono}?text=${encodeURIComponent(mensaje)}`;
-    window.open(url, "_blank");
-
-    setWaNote("WhatsApp está listo con el mensaje preparado. Adjunta el PDF descargado y pulsa Enviar.");
+    abrirWhatsAppUtil({ cliente, numeroCotizacion, fecha, total: quote.total, setWaError, setWaNote });
   }
 
   async function guardarHistorial() {
