@@ -10,10 +10,10 @@ async function obtenerPerfilDelToken(token) {
     return { perfil: null, motivo: `getUser falló: ${error ? error.message : "sin usuario"}` };
   }
   const { data: perfil, error: errorPerfil } = await admin
-    .from("perfiles")
-    .select("*")
-    .eq("id", data.user.id)
-    .maybeSingle();
+  .from("perfiles")
+  .select("id,email,rol,activo,nombre")
+  .eq("email", data.user.email)
+  .maybeSingle();
   if (errorPerfil) {
     return { perfil: null, motivo: `Consulta a perfiles falló: ${errorPerfil.message}` };
   }
