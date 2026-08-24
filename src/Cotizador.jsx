@@ -322,7 +322,7 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
         `Eliminó la cotización ${r.numero_cotizacion} (id ${r.id}), generada originalmente por ${r.creado_por_email || "desconocido"}`
       );
       setHistorialNota(`Cotización ${r.numero_cotizacion} eliminada. El número no se reutilizará.`);
-      cargarHistorial();
+      setHistorial((prev) => prev.filter((item) => item.id !== r.id));
     } catch (e) {
       setHistorialError(e.message || "No se pudo eliminar la cotización.");
     }
