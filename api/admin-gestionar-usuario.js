@@ -6,9 +6,21 @@ const admin = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVIC
 
 async function obtenerPerfilDelToken(token) {
   const { data, error } = await admin.auth.getUser(token);
-  if (error || !data?.user) return null;
-  const { data: perfil } = await admin.from("perfiles").select("*").eq("id", data.user.id).single();
-  return perfil || null;
+  if (error || !data?.user) {
+    return { perfil: null, motivo: `getUser falló: ${error ? error.message : "sin usuario"}` };
+  }
+  const { data: perfil, error: errorPerfil } = await admin
+    .from("perfiles")
+    .select("*")
+    .eq("id", data.user.id)
+    .maybeSingle();
+  if (errorPerfil) {
+    return { perfil: null, motivo: `Consulta a perfiles falló: ${errorPerfil.message}` };
+  }
+  if (!perfil) {
+    return { perfil: null, motivo: `No existe fila en perfiles para el id ${data.user.id} (correo del token: ${data.user.email})` };
+  }
+  return { perfil, motivo: null };
 }
 
 export default async function handler(req, res) {
@@ -17,14 +29,31 @@ export default async function handler(req, res) {
     return;
   }
   try {
-    const token = (req.headers.authorization || "").replace("Bearer ", "");
-    if (!token) {
-      res.status(401).json({ error: "Falta la sesión del administrador" });
+    // Diagnóstico: confirma que las variables de entorno del servidor
+    // existen antes de intentar nada. Mismo problema que tuvimos antes en
+    // admin-crear-usuario.js: si SUPABASE_URL/SERVICE_ROLE_KEY apuntan a un
+    // proyecto de Supabase distinto al que usa el navegador (VITE_SUPABASE_URL),
+    // el servidor nunca reconoce como válida una sesión que sí lo es.
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      res.status(500).json({
+        error: `Faltan variables de entorno en el servidor. SUPABASE_URL presente: ${!!process.env.SUPABASE_URL}. SUPABASE_SERVICE_ROLE_KEY presente: ${!!process.env.SUPABASE_SERVICE_ROLE_KEY}.`,
+      });
       return;
     }
-    const perfil = await obtenerPerfilDelToken(token);
+
+    const token = (req.headers.authorization || "").replace("Bearer ", "");
+    if (!token) {
+      res.status(401).json({ error: "Falta la sesión del administrador (no llegó el token)" });
+      return;
+    }
+
+    const { perfil, motivo } = await obtenerPerfilDelToken(token);
     if (!perfil || perfil.rol !== "admin" || !perfil.activo) {
-      res.status(403).json({ error: "Solo un administrador activo puede gestionar usuarios" });
+      res.status(403).json({
+        error: `Solo un administrador activo puede gestionar usuarios. Detalle: ${
+          motivo || `rol="${perfil?.rol}" activo=${perfil?.activo}`
+        }. Servidor apunta a: ${process.env.SUPABASE_URL}`,
+      });
       return;
     }
 
@@ -38,7 +67,11 @@ export default async function handler(req, res) {
       return;
     }
 
-    const { data: objetivo } = await admin.from("perfiles").select("*").eq("id", usuarioId).single();
+    const { data: objetivo, error: errorObjetivo } = await admin.from("perfiles").select("*").eq("id", usuarioId).maybeSingle();
+    if (errorObjetivo) {
+      res.status(500).json({ error: "No se pudo consultar el usuario objetivo: " + errorObjetivo.message });
+      return;
+    }
     if (!objetivo) {
       res.status(404).json({ error: "Usuario no encontrado" });
       return;
@@ -49,12 +82,24 @@ export default async function handler(req, res) {
     }
 
     if (accion === "eliminar") {
-      await admin.auth.admin.deleteUser(usuarioId);
-      await admin.from("perfiles").delete().eq("id", usuarioId);
+      const { error: errorAuth } = await admin.auth.admin.deleteUser(usuarioId);
+      if (errorAuth) {
+        res.status(500).json({ error: "No se pudo eliminar la cuenta de autenticación: " + errorAuth.message });
+        return;
+      }
+      const { error: errorPerfilDel } = await admin.from("perfiles").delete().eq("id", usuarioId);
+      if (errorPerfilDel) {
+        res.status(500).json({
+          error: "La cuenta de autenticación se eliminó, pero no se pudo borrar el perfil: " + errorPerfilDel.message,
+        });
+        return;
+      }
     } else if (accion === "desactivar") {
-      await admin.from("perfiles").update({ activo: false }).eq("id", usuarioId);
+      const { error: errorUpd } = await admin.from("perfiles").update({ activo: false }).eq("id", usuarioId);
+      if (errorUpd) { res.status(500).json({ error: "No se pudo desactivar: " + errorUpd.message }); return; }
     } else if (accion === "activar") {
-      await admin.from("perfiles").update({ activo: true }).eq("id", usuarioId);
+      const { error: errorUpd } = await admin.from("perfiles").update({ activo: true }).eq("id", usuarioId);
+      if (errorUpd) { res.status(500).json({ error: "No se pudo activar: " + errorUpd.message }); return; }
     } else {
       res.status(400).json({ error: "Acción no reconocida" });
       return;
@@ -69,6 +114,6 @@ export default async function handler(req, res) {
     res.status(200).json({ ok: true });
   } catch (e) {
     console.error("Error en admin-gestionar-usuario:", e);
-    res.status(500).json({ error: "No se pudo completar la acción" });
+    res.status(500).json({ error: "No se pudo completar la acción: " + (e?.message || String(e)) });
   }
 }

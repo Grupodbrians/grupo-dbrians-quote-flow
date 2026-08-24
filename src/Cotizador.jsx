@@ -314,8 +314,19 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
     setHistorialError("");
     setHistorialNota("");
     try {
-      const { error } = await supabase.from("cotizaciones").delete().eq("id", r.id);
+      // .select() después de .delete() hace que Supabase devuelva las filas
+      // que realmente se borraron. Sin esto, si la política RLS bloquea el
+      // borrado, Postgres no borra nada pero tampoco lanza error — el código
+      // anterior asumía éxito solo porque "error" era null, aunque 0 filas
+      // se hubieran tocado. Ahora lo comprobamos explícitamente.
+      const { data, error } = await supabase.from("cotizaciones").delete().eq("id", r.id).select();
       if (error) throw error;
+      if (!data || data.length === 0) {
+        setHistorialError(
+          "No se pudo eliminar la cotización: no tienes permiso, o ya no existe. No se registró ningún cambio."
+        );
+        return;
+      }
       await registrarAuditoria(
         perfil.email,
         "cotizacion_eliminada",
