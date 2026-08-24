@@ -40,12 +40,15 @@ export default async function handler(req, res) {
       });
       return;
     }
+const authorization = req.headers.authorization || "";
+const token = authorization.replace(/^Bearer\s+/i, "");
 
-    const token = (req.headers.authorization || "").replace("Bearer ", "");
-    if (!token) {
-      res.status(401).json({ error: "Falta la sesión del administrador (no llegó el token)" });
-      return;
-    }
+console.log("AUTH DEBUG:", {
+  authorizationRecibido: !!authorization,
+  tokenRecibido: !!token,
+  longitudToken: token.length,
+  inicioToken: token ? token.substring(0, 12) : null,
+});
 
     const { perfil, motivo } = await obtenerPerfilDelToken(token);
     if (!perfil || perfil.rol !== "admin" || !perfil.activo) {
