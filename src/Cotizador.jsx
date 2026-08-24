@@ -70,6 +70,8 @@ export default function Cotizador({ perfil }) {
   const [usuariosCargando, setUsuariosCargando] = useState(false);
   const [usuariosNota, setUsuariosNota] = useState("");
   const [usuariosError, setUsuariosError] = useState("");
+  const [historialNota, setHistorialNota] = useState("");
+  const [historialError, setHistorialError] = useState("");
 
   // Auditoría
   const [auditoria, setAuditoria] = useState([]);
@@ -302,6 +304,28 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
     aplicarRegistroHistorial(record);
     setAutoDescargarPendiente(true);
     setView("preview");
+  }
+
+  // Solo quien generó la cotización o un admin activo puede eliminarla
+  // (protegido por la política RLS "cotizaciones: eliminar admin o creador").
+  // No requiere función de servidor: borrar una fila de cotizaciones no toca
+  // auth.users, a diferencia de eliminar un usuario.
+  async function eliminarCotizacion(r) {
+    setHistorialError("");
+    setHistorialNota("");
+    try {
+      const { error } = await supabase.from("cotizaciones").delete().eq("id", r.id);
+      if (error) throw error;
+      await registrarAuditoria(
+        perfil.email,
+        "cotizacion_eliminada",
+        `Eliminó la cotización ${r.numero_cotizacion} (id ${r.id}), generada originalmente por ${r.creado_por_email || "desconocido"}`
+      );
+      setHistorialNota(`Cotización ${r.numero_cotizacion} eliminada. El número no se reutilizará.`);
+      cargarHistorial();
+    } catch (e) {
+      setHistorialError(e.message || "No se pudo eliminar la cotización.");
+    }
   }
 
   useEffect(() => {
@@ -1079,6 +1103,12 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
             <div className="cot-toolbar">
               <button className="cot-secondary-btn" onClick={cargarHistorial}><RefreshCw size={15} /> Actualizar</button>
             </div>
+            {historialError && <div className="cot-error-box" style={{ marginBottom: 14 }}>{historialError}</div>}
+            {historialNota && (
+              <div className="cot-error-box" style={{ marginBottom: 14, background: "#e6f2ee", borderColor: "#9cc7ba", color: "var(--teal-ink)" }}>
+                <CheckCircle2 size={14} style={{ verticalAlign: "-2px", marginRight: 6 }} />{historialNota}
+              </div>
+            )}
             {historialCargando && <p style={{ color: "var(--ink-soft)" }}>Cargando historial…</p>}
             {!historialCargando && historial.length === 0 && (
               <div className="cot-empty">
@@ -1103,6 +1133,19 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
                   >
                     <Download size={13} /> PDF
                   </button>
+                  {(esAdmin || r.creado_por === perfil.id) && (
+                    <button
+                      className="cot-iconbtn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (window.confirm(`¿Estás seguro de que deseas eliminar la cotización ${r.numero_cotizacion}?\nEsta acción no se puede deshacer.`)) {
+                          eliminarCotizacion(r);
+                        }
+                      }}
+                    >
+                      <Trash size={14} />
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

@@ -14,6 +14,7 @@ create table if not exists public.perfiles (
   activo boolean not null default true,
   creado_en timestamptz not null default now()
 );
+alter table public.perfiles add column if not exists nombre text;
 
 -- 2) Contador consecutivo para el número de cotización (COT-YYYYMMDD-0001, 0002, ...)
 --    Es una secuencia global: la fecha cambia sola cada día, pero el número
@@ -66,6 +67,22 @@ drop policy if exists "perfiles: cualquier usuario autenticado puede leer" on pu
 create policy "perfiles: cualquier usuario autenticado puede leer" on public.perfiles
   for select using (auth.role() = 'authenticated');
 
+-- Un admin activo puede actualizar cualquier perfil (activar/desactivar/cambiar rol).
+-- El trigger "proteger_admin_trigger" (más abajo) bloquea que el admin se
+-- desactive o cambie de rol a sí mismo o a otro admin, incluso si esta
+-- política lo permitiera.
+drop policy if exists "perfiles: admin activo puede actualizar" on public.perfiles;
+create policy "perfiles: admin activo puede actualizar" on public.perfiles
+  for update
+  using (exists (
+    select 1 from public.perfiles p
+    where p.id = auth.uid() and p.rol = 'admin' and p.activo = true
+  ))
+  with check (exists (
+    select 1 from public.perfiles p
+    where p.id = auth.uid() and p.rol = 'admin' and p.activo = true
+  ));
+
 drop policy if exists "cotizaciones: leer y crear si hay sesión" on public.cotizaciones;
 create policy "cotizaciones: leer y crear si hay sesión" on public.cotizaciones
   for select using (auth.role() = 'authenticated');
@@ -74,21 +91,102 @@ drop policy if exists "cotizaciones: insertar si hay sesión" on public.cotizaci
 create policy "cotizaciones: insertar si hay sesión" on public.cotizaciones
   for insert with check (auth.role() = 'authenticated');
 
+-- Sub-paso 4: eliminar una cotización solo puede hacerlo quien la generó
+-- originalmente (creado_por = auth.uid()) o un administrador activo.
+drop policy if exists "cotizaciones: eliminar admin o creador" on public.cotizaciones;
+create policy "cotizaciones: eliminar admin o creador" on public.cotizaciones
+  for delete
+  using (
+    creado_por = auth.uid()
+    or exists (
+      select 1 from public.perfiles p
+      where p.id = auth.uid() and p.rol = 'admin' and p.activo = true
+    )
+  );
+
+-- Auditoría: CUALQUIER usuario autenticado puede insertar (así queda registro
+-- de lo que hace cada quien), pero solo el administrador activo puede LEER
+-- el registro completo — esto se exige aquí, a nivel de base de datos, no
+-- solo ocultando el botón en la interfaz.
 drop policy if exists "auditoria: leer si hay sesión" on public.auditoria;
-create policy "auditoria: leer si hay sesión" on public.auditoria
-  for select using (auth.role() = 'authenticated');
+drop policy if exists "auditoria: solo admin puede leer" on public.auditoria;
+create policy "auditoria: solo admin puede leer" on public.auditoria
+  for select using (exists (
+    select 1 from public.perfiles p
+    where p.id = auth.uid() and p.rol = 'admin' and p.activo = true
+  ));
 
 drop policy if exists "auditoria: insertar si hay sesión" on public.auditoria;
 create policy "auditoria: insertar si hay sesión" on public.auditoria
   for insert with check (auth.role() = 'authenticated');
 
+-- 6) Auto-registro: cuando alguien crea su cuenta desde la pantalla
+--    "Registrarse", esta función crea automáticamente su fila en "perfiles"
+--    (siempre INACTIVA hasta que el administrador la active) y deja
+--    constancia en la auditoría. Corre con permisos elevados (security
+--    definer) para que funcione sin importar si el correo ya quedó
+--    confirmado o no.
+create or replace function public.crear_perfil_nuevo_usuario()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.perfiles (id, email, nombre, rol, activo)
+  values (
+    new.id,
+    new.email,
+    coalesce(new.raw_user_meta_data ->> 'nombre', ''),
+    'usuario',
+    false
+  )
+  on conflict (id) do nothing;
+
+  insert into public.auditoria (usuario_email, accion, detalle)
+  values (new.email, 'usuario_registrado', 'Se registró desde la pantalla de acceso; queda pendiente de activación');
+
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.crear_perfil_nuevo_usuario();
+
+-- 7) Protección del administrador: ni el propio admin ni otro admin pueden
+--    desactivarlo o quitarle el rol, ni por la interfaz ni editando la base
+--    de datos directamente.
+create or replace function public.proteger_admin()
+returns trigger
+language plpgsql
+as $$
+begin
+  if old.rol = 'admin' and (new.activo = false or new.rol <> 'admin') then
+    raise exception 'No se puede desactivar ni cambiar el rol del administrador';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists proteger_admin_trigger on public.perfiles;
+create trigger proteger_admin_trigger
+  before update on public.perfiles
+  for each row execute function public.proteger_admin();
+
 -- ============================================================
--- 6) Crear el PRIMER usuario administrador (hazlo tú, una sola vez)
+-- 8) Crear el PRIMER usuario administrador (hazlo tú, una sola vez)
 -- ============================================================
 -- a) Ve a Supabase → Authentication → Users → Add user → crea tu correo y
 --    contraseña de administrador ahí (esto SÍ hashea y guarda la contraseña
---    de forma segura, Supabase lo maneja solo).
--- b) Copia el "User UID" que te muestra, y corre esto reemplazando los valores:
+--    de forma segura, Supabase lo maneja solo). El trigger de arriba le crea
+--    automáticamente una fila en "perfiles" con rol "usuario" e inactiva.
+-- b) Sube su rol a admin y actívalo con esto (busca su id por correo, no
+--    hace falta copiar el UID a mano):
 --
 -- insert into public.perfiles (id, email, rol, activo)
--- values ('PEGA-AQUI-EL-UID', 'tu-correo@grupodbrians.com', 'admin', true);
+-- select id, email, 'admin', true
+-- from auth.users
+-- where email = 'tu-correo@grupodbrians.com'
+-- on conflict (id) do update set rol = 'admin', activo = true;
