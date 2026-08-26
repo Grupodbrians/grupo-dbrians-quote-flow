@@ -1,25 +1,36 @@
 import { createClient } from "@supabase/supabase-js";
 
 const admin = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { autoRefreshToken: false, persistSession: false },
-});
-
-async function obtenerPerfilDelToken(token) {
+  auth:async function obtenerPerfilDelToken(token) {
   const { data, error } = await admin.auth.getUser(token);
+
   if (error || !data?.user) {
-    return { perfil: null, motivo: `getUser falló: ${error ? error.message : "sin usuario"}` };
+    return {
+      perfil: null,
+      motivo: `getUser falló: ${error ? error.message : "sin usuario"}`,
+    };
   }
+
   const { data: perfil, error: errorPerfil } = await admin
-  .from("perfiles")
-  .select("id,email,rol,activo,nombre")
-  .eq("email", data.user.email)
-  .maybeSingle();
+    .from("perfiles")
+    .select("id,email,rol,activo,nombre")
+    .eq("email", data.user.email)
+    .maybeSingle();
+
   if (errorPerfil) {
-    return { perfil: null, motivo: `Consulta a perfiles falló: ${errorPerfil.message}` };
+    return {
+      perfil: null,
+      motivo: `Consulta a perfiles falló: ${errorPerfil.message}`,
+    };
   }
+
   if (!perfil) {
-    return { perfil: null, motivo: `No existe fila en perfiles para el id ${data.user.id} (correo del token: ${data.user.email})` };
+    return {
+      perfil: null,
+      motivo: `No existe fila en perfiles para el correo ${data.user.email}`,
+    };
   }
+
   return { perfil, motivo: null };
 }
 
@@ -40,15 +51,12 @@ export default async function handler(req, res) {
       });
       return;
     }
-const authorization = req.headers.authorization || "";
-const token = authorization.replace(/^Bearer\s+/i, "");
 
-console.log("AUTH DEBUG:", {
-  authorizationRecibido: !!authorization,
-  tokenRecibido: !!token,
-  longitudToken: token.length,
-  inicioToken: token ? token.substring(0, 12) : null,
-});
+    const token = (req.headers.authorization || "").replace("Bearer ", "");
+    if (!token) {
+      res.status(401).json({ error: "Falta la sesión del administrador (no llegó el token)" });
+      return;
+    }
 
     const { perfil, motivo } = await obtenerPerfilDelToken(token);
     if (!perfil || perfil.rol !== "admin" || !perfil.activo) {
