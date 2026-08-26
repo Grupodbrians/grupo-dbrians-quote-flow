@@ -1,130 +1,162 @@
 import { createClient } from "@supabase/supabase-js";
 
-const admin = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
-  auth:async function obtenerPerfilDelToken(token) {
-  const { data, error } = await admin.auth.getUser(token);
-
-  if (error || !data?.user) {
-    return {
-      perfil: null,
-      motivo: `getUser falló: ${error ? error.message : "sin usuario"}`,
-    };
-  }
-
-  const { data: perfil, error: errorPerfil } = await admin
-    .from("perfiles")
-    .select("id,email,rol,activo,nombre")
-    .eq("email", data.user.email)
-    .maybeSingle();
-
-  if (errorPerfil) {
-    return {
-      perfil: null,
-      motivo: `Consulta a perfiles falló: ${errorPerfil.message}`,
-    };
-  }
-
-  if (!perfil) {
-    return {
-      perfil: null,
-      motivo: `No existe fila en perfiles para el correo ${data.user.email}`,
-    };
-  }
-
-  return { perfil, motivo: null };
-}
-
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    res.status(405).json({ error: "Método no permitido" });
-    return;
-  }
   try {
-    // Diagnóstico: confirma que las variables de entorno del servidor
-    // existen antes de intentar nada. Mismo problema que tuvimos antes en
-    // admin-crear-usuario.js: si SUPABASE_URL/SERVICE_ROLE_KEY apuntan a un
-    // proyecto de Supabase distinto al que usa el navegador (VITE_SUPABASE_URL),
-    // el servidor nunca reconoce como válida una sesión que sí lo es.
-    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      res.status(500).json({
-        error: `Faltan variables de entorno en el servidor. SUPABASE_URL presente: ${!!process.env.SUPABASE_URL}. SUPABASE_SERVICE_ROLE_KEY presente: ${!!process.env.SUPABASE_SERVICE_ROLE_KEY}.`,
+    if (req.method !== "POST") {
+      return res.status(405).json({
+        error: "Método no permitido",
       });
-      return;
     }
 
-    const token = (req.headers.authorization || "").replace("Bearer ", "");
+    const supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+
+    const authorization = req.headers.authorization || "";
+    const token = authorization.replace(/^Bearer\s+/i, "");
+
     if (!token) {
-      res.status(401).json({ error: "Falta la sesión del administrador (no llegó el token)" });
-      return;
-    }
-
-    const { perfil, motivo } = await obtenerPerfilDelToken(token);
-    if (!perfil || perfil.rol !== "admin" || !perfil.activo) {
-      res.status(403).json({
-        error: `Solo un administrador activo puede gestionar usuarios. Detalle: ${
-          motivo || `rol="${perfil?.rol}" activo=${perfil?.activo}`
-        }. Servidor apunta a: ${process.env.SUPABASE_URL}`,
+      return res.status(401).json({
+        error: "No llegó el token de sesión.",
       });
-      return;
     }
 
-    const { usuarioId, accion } = req.body || {}; // accion: "desactivar" | "activar" | "eliminar"
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser(token);
+
+    if (authError || !user) {
+      return res.status(403).json({
+        error: `Sesión inválida: ${
+          authError?.message || "usuario no encontrado"
+        }`,
+      });
+    }
+
+    const { data: perfil, error: perfilError } = await supabase
+      .from("perfiles")
+      .select("id,email,rol,activo,nombre")
+      .eq("email", user.email)
+      .maybeSingle();
+
+    if (perfilError) {
+      return res.status(500).json({
+        error: `Error consultando perfiles: ${perfilError.message}`,
+      });
+    }
+
+    if (!perfil) {
+      return res.status(403).json({
+        error: `No existe perfil para ${user.email}.`,
+      });
+    }
+
+    if (perfil.rol !== "admin" || perfil.activo !== true) {
+      return res.status(403).json({
+        error: "Solo un administrador activo puede gestionar usuarios.",
+      });
+    }
+
+    const { usuarioId, accion } = req.body || {};
+
     if (!usuarioId || !accion) {
-      res.status(400).json({ error: "Falta el usuario o la acción" });
-      return;
-    }
-    if (usuarioId === perfil.id) {
-      res.status(400).json({ error: "No puedes desactivar ni eliminar la cuenta de administrador" });
-      return;
+      return res.status(400).json({
+        error: "Falta usuarioId o accion.",
+      });
     }
 
-    const { data: objetivo, error: errorObjetivo } = await admin.from("perfiles").select("*").eq("id", usuarioId).maybeSingle();
-    if (errorObjetivo) {
-      res.status(500).json({ error: "No se pudo consultar el usuario objetivo: " + errorObjetivo.message });
-      return;
+    if (usuarioId === perfil.id) {
+      return res.status(400).json({
+        error: "No puedes eliminar ni desactivar tu propia cuenta.",
+      });
     }
+
+    const { data: objetivo, error: objetivoError } = await supabase
+      .from("perfiles")
+      .select("id,email,rol,activo")
+      .eq("id", usuarioId)
+      .maybeSingle();
+
+    if (objetivoError) {
+      return res.status(500).json({
+        error: `Error consultando usuario: ${objetivoError.message}`,
+      });
+    }
+
     if (!objetivo) {
-      res.status(404).json({ error: "Usuario no encontrado" });
-      return;
+      return res.status(404).json({
+        error: "Usuario no encontrado.",
+      });
     }
+
     if (objetivo.rol === "admin") {
-      res.status(400).json({ error: "No se puede desactivar ni eliminar a un administrador" });
-      return;
+      return res.status(400).json({
+        error: "No se puede eliminar ni desactivar un administrador.",
+      });
     }
 
     if (accion === "eliminar") {
-      const { error: errorAuth } = await admin.auth.admin.deleteUser(usuarioId);
-      if (errorAuth) {
-        res.status(500).json({ error: "No se pudo eliminar la cuenta de autenticación: " + errorAuth.message });
-        return;
-      }
-      const { error: errorPerfilDel } = await admin.from("perfiles").delete().eq("id", usuarioId);
-      if (errorPerfilDel) {
-        res.status(500).json({
-          error: "La cuenta de autenticación se eliminó, pero no se pudo borrar el perfil: " + errorPerfilDel.message,
+      const { error } = await supabase.auth.admin.deleteUser(usuarioId);
+
+      if (error) {
+        return res.status(500).json({
+          error: `No se pudo eliminar el usuario: ${error.message}`,
         });
-        return;
       }
+
+      await supabase
+        .from("perfiles")
+        .delete()
+        .eq("id", usuarioId);
+
     } else if (accion === "desactivar") {
-      const { error: errorUpd } = await admin.from("perfiles").update({ activo: false }).eq("id", usuarioId);
-      if (errorUpd) { res.status(500).json({ error: "No se pudo desactivar: " + errorUpd.message }); return; }
+      const { error } = await supabase
+        .from("perfiles")
+        .update({ activo: false })
+        .eq("id", usuarioId);
+
+      if (error) {
+        return res.status(500).json({
+          error: `No se pudo desactivar: ${error.message}`,
+        });
+      }
+
     } else if (accion === "activar") {
-      const { error: errorUpd } = await admin.from("perfiles").update({ activo: true }).eq("id", usuarioId);
-      if (errorUpd) { res.status(500).json({ error: "No se pudo activar: " + errorUpd.message }); return; }
+      const { error } = await supabase
+        .from("perfiles")
+        .update({ activo: true })
+        .eq("id", usuarioId);
+
+      if (error) {
+        return res.status(500).json({
+          error: `No se pudo activar: ${error.message}`,
+        });
+      }
+
     } else {
-      res.status(400).json({ error: "Acción no reconocida" });
-      return;
+      return res.status(400).json({
+        error: "Acción no reconocida.",
+      });
     }
 
-    await admin.from("auditoria").insert({
+    await supabase.from("auditoria").insert({
       usuario_email: perfil.email,
       accion: `usuario_${accion}`,
       detalle: `${accion} la cuenta de ${objetivo.email}`,
     });
 
-    res.status(200).json({ ok: true });
-  } catch (e) {
-    console.error("Error en admin-gestionar-usuario:", e);
-    res.status(500).json({ error: "No se pudo completar la acción: " + (e?.message || String(e)) });
+    return res.status(200).json({
+      ok: true,
+      mensaje: "Operación realizada correctamente.",
+    });
+
+  } catch (error) {
+    console.error("admin-gestionar-usuario:", error);
+
+    return res.status(500).json({
+      error: `Error interno: ${error?.message || String(error)}`,
+    });
   }
 }
