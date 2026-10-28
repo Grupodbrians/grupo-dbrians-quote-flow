@@ -25,6 +25,8 @@ import {
   abrirWhatsApp as abrirWhatsAppUtil,
 } from "./cotizador/utils/whatsapp.js";
 import { generarPDFCliente as generarPDFClienteUtil } from "./cotizador/utils/pdf.js";
+import { extraerCotizacionDePDF } from "./cotizador/utils/extraccionPdf.js";
+import { cargarPdfJs } from "./cotizador/utils/pdfjsCargador.js";
 
 function genNumeroCotizacion() {
   const d = new Date();
@@ -42,6 +44,9 @@ export default function Cotizador({ perfil }) {
   const [extrayendo, setExtrayendo] = useState(false);
   const [extraccionError, setExtraccionError] = useState("");
   const [extraccionOk, setExtraccionOk] = useState(false);
+  const [archivoActual, setArchivoActual] = useState(null); // archivo subido, por si se pide leerlo con IA
+  const [avisosExtraccion, setAvisosExtraccion] = useState([]);
+  const [modoExtraccion, setModoExtraccion] = useState("local"); // "local" (sin IA) | "ia"
 
   const [proveedor, setProveedor] = useState({ nombre: "", tipo: "Fabricante" });
   const [items, setItems] = useState([emptyItem()]);
@@ -123,6 +128,76 @@ export default function Cotizador({ perfil }) {
   }
   function removeImpuesto(id) {
     setImpuestos((prev) => prev.filter((t) => t.id !== id));
+  }
+
+  // Lectura de PDF SIN inteligencia artificial: el texto se extrae en el propio
+  // navegador (pdf.js) y se interpreta con reglas (ver extraccionPdf.js). El
+  // documento no sale del equipo del usuario.
+  async function extraerLocal(file) {
+    if (!file) return;
+    setArchivoActual(file);
+    setArchivoNombre(file.name);
+    setModoExtraccion("local");
+    setExtraccionError("");
+    setExtraccionOk(false);
+    setAvisosExtraccion([]);
+
+    const esPdf = (file.type || "").includes("pdf") || file.name.toLowerCase().endsWith(".pdf");
+    if (!esPdf) {
+      setExtraccionError(
+        "Las imágenes (foto o captura) no contienen texto que se pueda leer sin IA. Usa el botón «Leer con IA» o carga los datos manualmente."
+      );
+      return;
+    }
+
+    setExtrayendo(true);
+    try {
+      const [pdfjs, buffer] = await Promise.all([cargarPdfJs(), file.arrayBuffer()]);
+      const r = await extraerCotizacionDePDF(pdfjs, new Uint8Array(buffer));
+
+      if (r.sinTexto) {
+        setExtraccionError(
+          "Este PDF es un escaneo (solo imagen) y no tiene texto que leer. Usa el botón «Leer con IA» o carga los datos manualmente."
+        );
+        setExtrayendo(false);
+        return;
+      }
+      if (!r.items.length) {
+        setAvisosExtraccion(r.avisos);
+        setExtraccionError(
+          "No se pudo identificar la tabla de productos de este PDF. Puedes probar con «Leer con IA» o cargar los datos manualmente."
+        );
+        setExtrayendo(false);
+        return;
+      }
+
+      setProveedor({ nombre: r.proveedor_nombre || "", tipo: r.proveedor_tipo || "Fabricante" });
+      const moneda = String(r.moneda || "DOP").toUpperCase().slice(0, 3) || "DOP";
+      setItems(
+        r.items.map((it) => ({
+          id: uid(),
+          descripcion: it.descripcion || "",
+          cantidad: Number(it.cantidad) || 1,
+          precioUnitario: Number(it.precioUnitario) || 0,
+          moneda,
+        }))
+      );
+      if (moneda !== "USD") setTasas((prev) => ({ ...prev, [moneda]: prev[moneda] || 1 }));
+      setAvisosExtraccion(r.avisos);
+      setExtraccionOk(true);
+    } catch (e) {
+      console.error("Error leyendo el PDF:", e);
+      setExtraccionError(
+        "No se pudo leer este PDF (puede estar protegido o dañado). Prueba con «Leer con IA» o carga los datos manualmente."
+      );
+    }
+    setExtrayendo(false);
+  }
+
+  function extraerConIA(file) {
+    setModoExtraccion("ia");
+    setAvisosExtraccion([]);
+    return extraerDocumento(file);
   }
 
   async function extraerDocumento(file) {
@@ -730,8 +805,8 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
                 <>
                   <Upload size={26} style={{ color: "var(--brass)", marginBottom: 10 }} />
                   <p style={{ margin: "0 0 14px", fontSize: 14, color: "var(--ink-soft)" }}>
-                    Sube la cotización del proveedor (PDF o imagen) y el sistema extrae los artículos,
-                    precios y moneda automáticamente.
+                    Sube la cotización del proveedor en PDF y el sistema extrae el proveedor, los artículos,
+                    precios y moneda automáticamente, sin usar inteligencia artificial.
                   </p>
                   <label className="cot-upload-label">
                     <Upload size={15} />
@@ -739,7 +814,11 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
                     <input
                       type="file"
                       accept=".pdf,.png,.jpg,.jpeg,.webp"
-                      onChange={(e) => extraerDocumento(e.target.files && e.target.files[0])}
+                      onChange={(e) => {
+                        const f = e.target.files && e.target.files[0];
+                        extraerLocal(f);
+                        e.target.value = ""; // permite volver a elegir el mismo archivo
+                      }}
                     />
                   </label>
                   {archivoNombre && <p className="cot-upload-hint">{archivoNombre}</p>}
@@ -754,12 +833,31 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
                 </>
               )}
               {extraccionError && (
-                <div className="cot-error-box" style={{ textAlign: "left", marginTop: 16 }}>{extraccionError}</div>
+                <div className="cot-error-box" style={{ textAlign: "left", marginTop: 16 }}>
+                  {extraccionError}
+                  {modoExtraccion === "local" && avisosExtraccion.length > 0 && (
+                    <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+                      {avisosExtraccion.map((a, i) => <li key={i}>{a}</li>)}
+                    </ul>
+                  )}
+                </div>
+              )}
+              {archivoActual && !extrayendo && extraccionError && modoExtraccion === "local" && (
+                <div style={{ marginTop: 12 }}>
+                  <button className="cot-skip-link" onClick={() => extraerConIA(archivoActual)} title="Envía el documento a la IA de Claude para leerlo">
+                    Leer con IA (opcional)
+                  </button>
+                </div>
               )}
               {extraccionOk && !extrayendo && (
                 <div className="cot-error-box" style={{ textAlign: "left", marginTop: 16, background: "#e6f2ee", borderColor: "#9cc7ba", color: "var(--teal-ink)" }}>
                   <CheckCircle2 size={14} style={{ verticalAlign: "-2px", marginRight: 6 }} />
                   Datos extraídos. Revisa y completa el resto en la pestaña "Datos".
+                  {modoExtraccion === "local" && avisosExtraccion.length > 0 && (
+                    <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: 12.5 }}>
+                      {avisosExtraccion.map((a, i) => <li key={i}>{a}</li>)}
+                    </ul>
+                  )}
                   <div style={{ marginTop: 10 }}>
                     <button className="cot-primary-btn" onClick={() => setView("form")}>
                       Ir a los datos <ChevronRight size={16} />

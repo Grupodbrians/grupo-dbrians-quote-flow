@@ -134,3 +134,26 @@ compártemelo tal cual.
   valida también en el servidor, no solo en la interfaz.
 - El administrador no puede desactivarse ni eliminarse.
 - `.env` y `.env.local` están en `.gitignore`.
+
+## 10. Restablecer contraseña (configuración en Supabase)
+
+El botón **¿Olvidaste tu contraseña?** de la pantalla de acceso envía un enlace al correo del usuario.
+Para que el enlace lleve de vuelta a la app, configura una sola vez en Supabase:
+
+1. **Authentication → URL Configuration → Site URL**: `https://cotizaciones.grupodbrians.com`
+2. En **Redirect URLs** agrega: `https://cotizaciones.grupodbrians.com` y `https://cotizaciones.grupodbrians.com/**`
+3. (Recomendado) **Authentication → SMTP Settings**: conecta tu propio servidor de correo. El correo
+   integrado de Supabase está limitado a pocos mensajes por hora y puede caer en spam.
+4. (Opcional) **Authentication → Email Templates → Reset Password**: traduce el texto al español.
+
+Al abrir el enlace, el usuario elige su nueva contraseña (mínimo 8 caracteres), la sesión temporal se
+cierra y entra con la contraseña nueva. Queda registrado en Auditoría como `contrasena_restablecida`.
+
+## 11. Lectura de PDF sin IA
+
+En la pantalla **Documento**, el PDF del proveedor se lee dentro del navegador (pdf.js) y se interpreta
+con reglas: detecta moneda, proveedor y la tabla de renglones (descripción, cantidad, precio unitario) y
+compara la suma con el subtotal impreso en el documento. No se envía a ningún servicio externo.
+Limitaciones: solo PDFs con texto (no escaneos ni fotos). Para esos casos queda el botón opcional
+**Leer con IA**, que usa `ANTHROPIC_API_KEY` como antes. El código está en
+`src/cotizador/utils/extraccionPdf.js`.

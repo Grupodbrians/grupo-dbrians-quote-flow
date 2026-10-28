@@ -3,7 +3,7 @@ import { LogIn, AlertCircle } from "lucide-react";
 import { LOGO_DATA_URI } from "./logo.js";
 import { supabase } from "./supabaseClient.js";
 
-export default function Login({ mensajeInicial, onRegistrarse }) {
+export default function Login({ mensajeInicial, mensajeOk, onRegistrarse, onOlvide }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [cargando, setCargando] = useState(false);
@@ -69,6 +69,11 @@ export default function Login({ mensajeInicial, onRegistrarse }) {
       <div className="qf-login-card">
         <img src={LOGO_DATA_URI} alt="Grupo D'Brians" className="qf-login-logo" />
         <h1>Quote Flow — Acceso</h1>
+        {mensajeOk && !error && (
+          <div className="qf-login-error" style={{ background: "#e6f2ee", borderColor: "#9cc7ba", color: "#1f5f4f" }}>
+            <span>{mensajeOk}</span>
+          </div>
+        )}
         {error && (
           <div className="qf-login-error">
             <AlertCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
@@ -88,6 +93,17 @@ export default function Login({ mensajeInicial, onRegistrarse }) {
             <LogIn size={15} /> {cargando ? "Ingresando…" : "Ingresar"}
           </button>
         </form>
+        {onOlvide && (
+          <p style={{ fontSize: 12, textAlign: "center", marginTop: 12, marginBottom: 0 }}>
+            <button
+              type="button"
+              onClick={onOlvide}
+              style={{ background: "none", border: "none", padding: 0, color: "#a9782e", textDecoration: "underline", cursor: "pointer", font: "inherit" }}
+            >
+              ¿Olvidaste tu contraseña?
+            </button>
+          </p>
+        )}
         <p style={{ fontSize: 12, color: "#6b7280", textAlign: "center", marginTop: 16 }}>
           ¿No tienes cuenta?{" "}
           <button
