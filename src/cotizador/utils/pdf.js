@@ -111,6 +111,15 @@ function copiaDePagina(nodo, { primera, ultima, desde, hasta }) {
   return copia;
 }
 
+// Ancho fijo (px) al que se dibuja el documento del cliente en el PDF.
+const ANCHO_PDF = 780;
+
+function ajustarAncho(el) {
+  el.style.width = `${ANCHO_PDF}px`;
+  el.style.maxWidth = "none";
+  el.style.margin = "0";
+}
+
 export async function generarPDFCliente({ nodo, numeroCotizacion, setPdfError, setPdfGenerado, setGenerandoPDF }) {
   setPdfError("");
   setPdfGenerado(false);
@@ -127,22 +136,29 @@ export async function generarPDFCliente({ nodo, numeroCotizacion, setPdfError, s
     const imgWidth = pageWidth - margen * 2;
     const alturaUtil = pageHeight - margen * 2;
 
-    const anchoDoc = Math.ceil(nodo.getBoundingClientRect().width);
-    const ptPorPx = imgWidth / anchoDoc;
-    const paginas = paginarDocumento(nodo, alturaUtil / ptPorPx);
+    // Cada página se dibuja desde una copia fuera de pantalla, siempre al mismo
+    // ancho: así el PDF sale igual desde un teléfono, una laptop o un monitor
+    // grande. Se mantiene dentro de un contenedor con la clase de la app
+    // (colores y tipografía) y con una copia de las hojas de estilo.
+    const claseApp = nodo.closest(".cot-app") ? "cot-app" : "";
+    contenedor = document.createElement("div");
+    contenedor.className = claseApp;
+    contenedor.style.cssText = `position:absolute;left:-100000px;top:0;width:${ANCHO_PDF}px;padding:0;margin:0;border:0;min-height:0;background:#fff;`;
+    document.querySelectorAll("style").forEach((st) => contenedor.appendChild(st.cloneNode(true)));
+    document.body.appendChild(contenedor);
+
+    // Copia completa al ancho del PDF, solo para medir dónde cortar cada página.
+    const base = nodo.cloneNode(true);
+    base.removeAttribute("id");
+    ajustarAncho(base);
+    contenedor.appendChild(base);
+    const ptPorPx = imgWidth / ANCHO_PDF;
+    const paginas = paginarDocumento(base, alturaUtil / ptPorPx);
+    base.remove();
     // Una o dos páginas: PNG a escala 3 (máxima nitidez, como siempre).
     // Documentos largos: JPEG a escala 2, para que el archivo no pese decenas de MB.
     const largo = paginas.length > 2;
 
-    // Cada página se dibuja desde una copia fuera de pantalla. Se mantiene dentro
-    // de un contenedor con la clase de la app (colores y tipografía) y con una
-    // copia de las hojas de estilo, para que se vea igual que en pantalla.
-    const claseApp = nodo.closest(".cot-app") ? "cot-app" : "";
-    contenedor = document.createElement("div");
-    contenedor.className = claseApp;
-    contenedor.style.cssText = `position:absolute;left:-100000px;top:0;width:${anchoDoc}px;padding:0;margin:0;border:0;min-height:0;background:#fff;`;
-    document.querySelectorAll("style").forEach((st) => contenedor.appendChild(st.cloneNode(true)));
-    document.body.appendChild(contenedor);
     // html2canvas copia todo el documento en cada captura; se le indica que solo
     // copie el contenedor, así una cotización de cientos de renglones no se
     // vuelve lenta.
@@ -150,10 +166,8 @@ export async function generarPDFCliente({ nodo, numeroCotizacion, setPdfError, s
       !(contenedor.contains(el) || el.contains(contenedor) || el === document.head || document.head.contains(el));
 
     for (let i = 0; i < paginas.length; i++) {
-      const copia = copiaDePagina(nodo, paginas[i]);
-      copia.style.width = `${anchoDoc}px`;
-      copia.style.maxWidth = "none";
-      copia.style.margin = "0";
+      const copia = copiaDePagina(base, paginas[i]);
+      ajustarAncho(copia);
       contenedor.appendChild(copia);
 
       const canvas = await window.html2canvas(copia, {
@@ -161,6 +175,7 @@ export async function generarPDFCliente({ nodo, numeroCotizacion, setPdfError, s
         useCORS: true,
         backgroundColor: "#ffffff",
         ignoreElements: soloContenedor,
+        windowWidth: Math.max(window.innerWidth, ANCHO_PDF + 40),
       });
       const imgData = largo ? canvas.toDataURL("image/jpeg", 0.8) : canvas.toDataURL("image/png");
       let ancho = imgWidth;

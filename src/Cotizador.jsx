@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback, memo } from "react";
 import {
   Plus, Trash2, Printer, Save, ArrowLeft, RefreshCw, Building2,
   Percent, DollarSign, History as HistoryIcon, Eye, Stamp,
@@ -33,6 +33,67 @@ function genNumeroCotizacion() {
   const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
   return `COT-${ymd}-${Math.floor(1000 + Math.random() * 9000)}`;
 }
+
+// Campo numérico que se ve vacío cuando vale 0 (no hay que borrar el 0 antes de
+// escribir) y que selecciona su contenido al tocarlo, para reemplazarlo de una vez.
+function CampoNumero({ valor, onCambio, ...props }) {
+  const [texto, setTexto] = useState(valor ? String(valor) : "");
+  useEffect(() => {
+    // Solo se sincroniza cuando el valor cambia desde fuera (PDF, historial,
+    // nueva cotización), no mientras se escribe ("0." o "1.5" a medias).
+    setTexto((t) => (Number(t || 0) === Number(valor || 0) ? t : valor ? String(valor) : ""));
+  }, [valor]);
+  return (
+    <input
+      type="number"
+      inputMode="decimal"
+      value={texto}
+      onFocus={(e) => e.target.select()}
+      onChange={(e) => {
+        setTexto(e.target.value);
+        onCambio(e.target.value === "" ? 0 : Number(e.target.value));
+      }}
+      {...props}
+    />
+  );
+}
+
+// Un renglón de artículo. Con memo, al escribir en cualquier otro campo (o en
+// otro renglón) este no se vuelve a dibujar: con cientos de renglones es lo que
+// mantiene la pantalla rápida.
+const FilaArticulo = memo(function FilaArticulo({ it, onActualizar, onEliminar }) {
+  return (
+    <div className="cot-item">
+      <div className="cot-item-grid">
+        <div className="cot-field" style={{ marginBottom: 0 }}>
+          <label>Descripción</label>
+          <input value={it.descripcion} onChange={(e) => onActualizar(it.id, { descripcion: e.target.value })} placeholder="Producto o servicio" />
+        </div>
+        <div className="cot-field" style={{ marginBottom: 0 }}>
+          <label>Cant.</label>
+          <CampoNumero min="0" valor={it.cantidad} onCambio={(v) => onActualizar(it.id, { cantidad: v })} />
+        </div>
+        <div className="cot-field" style={{ marginBottom: 0 }}>
+          <label>Precio unit.</label>
+          <CampoNumero min="0" step="0.01" valor={it.precioUnitario} onCambio={(v) => onActualizar(it.id, { precioUnitario: v })} />
+        </div>
+        <div className="cot-field" style={{ marginBottom: 0 }}>
+          <label>Moneda</label>
+          <input
+            list="cot-monedas"
+            value={it.moneda}
+            onChange={(e) => onActualizar(it.id, { moneda: e.target.value.toUpperCase().slice(0, 3) })}
+          />
+        </div>
+        <button className="cot-iconbtn" onClick={() => onEliminar(it.id)} title="Eliminar renglón"><Trash2 size={15} /></button>
+      </div>
+    </div>
+  );
+});
+
+// Columnas del listado del Historial. Las cotizaciones completas (con todos sus
+// renglones) se piden solo al abrir una, para que el listado cargue rápido.
+const COLUMNAS_HISTORIAL = "id, numero_cotizacion, fecha, cliente, proveedor, total, creado_por, creado_por_email, creado_en";
 
 export default function Cotizador({ perfil }) {
   const [view, setView] = useState("upload");
@@ -111,15 +172,15 @@ export default function Cotizador({ perfil }) {
     [items, tasas, logistica, margenUSD, impuestos]
   );
 
-  function updateItem(id, patch) {
+  const updateItem = useCallback((id, patch) => {
     setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
-  }
+  }, []);
   function addItem() {
     setItems((prev) => [...prev, emptyItem()]);
   }
-  function removeItem(id) {
+  const removeItem = useCallback((id) => {
     setItems((prev) => (prev.length > 1 ? prev.filter((it) => it.id !== id) : prev));
-  }
+  }, []);
   function addImpuesto() {
     setImpuestos((prev) => [...prev, { id: uid(), nombre: "Nuevo impuesto", porcentaje: 0, activo: true }]);
   }
@@ -263,6 +324,7 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
   }
 
   async function generar() {
+    if (obteniendoNumero) return; // evita pedir dos números si se pulsa dos veces
     if (!validar()) return;
     setPdfGenerado(false);
     setPdfError("");
@@ -347,7 +409,7 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
     try {
       const { data, error } = await supabase
         .from("cotizaciones")
-        .select("*")
+        .select(COLUMNAS_HISTORIAL)
         .order("creado_en", { ascending: true });
       if (error) throw error;
       setHistorial(data || []);
@@ -370,13 +432,27 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
     setCliente(record.cliente);
   }
 
-  function cargarCotizacion(record) {
-    aplicarRegistroHistorial(record);
+  async function obtenerCotizacionCompleta(record) {
+    setHistorialError("");
+    const { data, error } = await supabase.from("cotizaciones").select("*").eq("id", record.id).single();
+    if (error || !data) {
+      setHistorialError("No se pudo abrir la cotización. Verifica tu conexión e intenta de nuevo.");
+      return null;
+    }
+    return data;
+  }
+
+  async function cargarCotizacion(record) {
+    const completa = await obtenerCotizacionCompleta(record);
+    if (!completa) return;
+    aplicarRegistroHistorial(completa);
     setView("preview");
   }
 
-  function descargarDesdeHistorial(record) {
-    aplicarRegistroHistorial(record);
+  async function descargarDesdeHistorial(record) {
+    const completa = await obtenerCotizacionCompleta(record);
+    if (!completa) return;
+    aplicarRegistroHistorial(completa);
     setAutoDescargarPendiente(true);
     setView("preview");
   }
@@ -413,6 +489,12 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
       setHistorialError(e.message || "No se pudo eliminar la cotización.");
     }
   }
+
+  // Al cambiar de pestaña se empieza arriba (en el teléfono, "Generar
+  // cotización" queda al final de una lista larga).
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [view]);
 
   useEffect(() => {
     if (autoDescargarPendiente && view === "preview") {
@@ -583,8 +665,8 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
         .cot-nav button.active { background: var(--brass); border-color: var(--brass); color: #241a08; font-weight: 600; }
         .cot-nav button:hover:not(.active) { border-color: rgba(241,239,230,0.6); }
         .cot-body { padding: 24px; }
-        .cot-grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 20px; align-items: start; }
-        @media (max-width: 860px) { .cot-grid { grid-template-columns: 1fr; } }
+        .cot-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 380px); gap: 20px; align-items: start; }
+        @media (max-width: 860px) { .cot-grid { grid-template-columns: minmax(0, 1fr); } }
         .cot-card {
           background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
           padding: 18px 20px; margin-bottom: 16px;
@@ -611,9 +693,20 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
         .cot-item {
           border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin-bottom: 10px;
           background: #fbfaf5; position: relative;
+          /* Con cientos de renglones, el navegador solo dibuja los que se ven. */
+          content-visibility: auto; contain-intrinsic-size: auto 78px;
         }
-        .cot-item-grid { display: grid; grid-template-columns: 2.2fr 0.7fr 1fr 0.8fr auto; gap: 8px; align-items: end; }
-        @media (max-width: 700px) { .cot-item-grid { grid-template-columns: 1fr 1fr; } }
+        .cot-item-grid { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(0, 0.7fr) minmax(0, 1fr) minmax(0, 0.8fr) auto; gap: 8px; align-items: end; }
+        /* El renglón se acomoda al ancho de su tarjeta (no al de la pantalla):
+           en una laptop la tarjeta comparte espacio con el resumen. */
+        .cot-card { container-type: inline-size; }
+        @container (max-width: 600px) {
+          .cot-item-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1fr) auto; }
+          .cot-item-grid > .cot-field:first-child { grid-column: 1 / -1; }
+        }
+        @container (max-width: 340px) {
+          .cot-item-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+        }
         .cot-item-margin { margin: 10px 0 0; padding-top: 10px; border-top: 1px dashed var(--line); max-width: 320px; }
         .cot-item-margin label { color: var(--brass-ink); }
         .cot-iconbtn {
@@ -633,7 +726,7 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
         }
         .cot-toggle-group button.active { background: var(--ink); color: #f1efe6; }
         .cot-tax-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-        .cot-tax-row input[type="text"] { flex: 1; }
+        .cot-tax-row input[type="text"] { flex: 1; min-width: 0; }
         .cot-tax-row input[type="number"] { width: 80px; }
         .cot-checkbox { display: flex; align-items: center; gap: 6px; }
         .cot-primary-btn {
@@ -642,6 +735,7 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
           font-family: var(--font-body);
         }
         .cot-primary-btn:hover { background: #97671f; }
+        .cot-primary-btn:disabled { opacity: 0.7; cursor: default; }
         .cot-whatsapp-btn {
           background: #25D366; color: #073b21; border: none; padding: 12px 20px; border-radius: 8px;
           font-size: 14px; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
@@ -750,6 +844,38 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
           position: fixed; bottom: 14px; right: 14px; background: var(--ink); color: var(--brass);
           font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.3px; padding: 6px 12px;
           border-radius: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.18); z-index: 50; pointer-events: none;
+        }
+        /* Laptop y tableta */
+        @media (max-width: 860px) {
+          .cot-topbar { padding: 12px 14px; }
+          .cot-nav {
+            width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch;
+            scrollbar-width: none; padding-bottom: 2px;
+          }
+          .cot-nav::-webkit-scrollbar { display: none; }
+          .cot-nav button { flex-shrink: 0; }
+          .cot-live-panel { position: static; order: -1; }
+        }
+        /* Teléfono */
+        @media (max-width: 640px) {
+          .cot-app { border-radius: 0; border-left: none; border-right: none; }
+          .cot-body { padding: 12px 12px 56px; } /* espacio para que la marca fija no tape botones */
+          .cot-card { padding: 14px; }
+          .cot-row.cols-2, .cot-row.cols-3 { grid-template-columns: 1fr; }
+          /* 16 px evita que el iPhone haga zoom al tocar un campo. */
+          .cot-field input, .cot-field select, .cot-field textarea, .cot-tax-row input { font-size: 16px; }
+          .cot-tax-row input[type="number"] { width: 72px; }
+          .cot-toolbar > button { flex: 1 1 calc(50% - 10px); justify-content: center; }
+          .cot-body .cot-doc { padding: 16px; }
+          .cot-body .cot-letterhead { margin: -16px -16px 16px -16px; padding: 14px 16px; }
+          .cot-body .cot-doc-header h1 { font-size: 21px; }
+          .cot-body .cot-doc-table { font-size: 12.5px; }
+          .cot-body .cot-doc-table td, .cot-body .cot-doc-table th { padding: 6px 4px; }
+          .cot-body .cot-doc-table td:first-child { overflow-wrap: anywhere; }
+          .cot-body .cot-doc-totals { width: 100%; }
+          .cot-history-item { flex-direction: column; align-items: stretch; gap: 10px; }
+          .cot-upload-box { padding: 28px 16px; margin: 8px auto; }
+          .cot-badge { bottom: 8px; right: 8px; font-size: 9.5px; padding: 4px 9px; }
         }
         @media print {
           .cot-topbar, .cot-toolbar, .cot-error-box, .cot-print-hide, .cot-badge { display: none !important; }
@@ -906,31 +1032,7 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
                 <div className="cot-card">
                   <h2><DollarSign size={16} /> Artículos de la cotización del proveedor</h2>
                   {items.map((it) => (
-                    <div className="cot-item" key={it.id}>
-                      <div className="cot-item-grid">
-                        <div className="cot-field" style={{ marginBottom: 0 }}>
-                          <label>Descripción</label>
-                          <input value={it.descripcion} onChange={(e) => updateItem(it.id, { descripcion: e.target.value })} placeholder="Producto o servicio" />
-                        </div>
-                        <div className="cot-field" style={{ marginBottom: 0 }}>
-                          <label>Cant.</label>
-                          <input type="number" min="0" value={it.cantidad} onChange={(e) => updateItem(it.id, { cantidad: Number(e.target.value) })} />
-                        </div>
-                        <div className="cot-field" style={{ marginBottom: 0 }}>
-                          <label>Precio unit.</label>
-                          <input type="number" min="0" step="0.01" value={it.precioUnitario} onChange={(e) => updateItem(it.id, { precioUnitario: Number(e.target.value) })} />
-                        </div>
-                        <div className="cot-field" style={{ marginBottom: 0 }}>
-                          <label>Moneda</label>
-                          <input
-                            list="cot-monedas"
-                            value={it.moneda}
-                            onChange={(e) => updateItem(it.id, { moneda: e.target.value.toUpperCase().slice(0, 3) })}
-                          />
-                        </div>
-                        <button className="cot-iconbtn" onClick={() => removeItem(it.id)} title="Eliminar renglón"><Trash2 size={15} /></button>
-                      </div>
-                    </div>
+                    <FilaArticulo key={it.id} it={it} onActualizar={updateItem} onEliminar={removeItem} />
                   ))}
                   <button className="cot-addline" onClick={addItem}><Plus size={14} /> Agregar artículo</button>
                   <datalist id="cot-monedas">
@@ -944,7 +1046,7 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
                     {monedasParaTasas.map((c) => (
                       <div className="cot-field" key={c}>
                         <label>{c} por 1 USD</label>
-                        <input type="number" min="0" step="0.0001" value={tasas[c] ?? ""} onChange={(e) => setTasas({ ...tasas, [c]: Number(e.target.value) })} />
+                        <CampoNumero min="0" step="0.0001" valor={tasas[c]} onCambio={(v) => setTasas((prev) => ({ ...prev, [c]: v }))} />
                       </div>
                     ))}
                   </div>
@@ -954,7 +1056,7 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
                   <h2><DollarSign size={16} /> Gastos logísticos / transporte</h2>
                   <div className="cot-field" style={{ maxWidth: 260 }}>
                     <label>Monto en pesos dominicanos (RD$)</label>
-                    <input type="number" min="0" step="0.01" value={logistica.valorDOP} onChange={(e) => setLogistica({ valorDOP: Number(e.target.value) })} />
+                    <CampoNumero min="0" step="0.01" valor={logistica.valorDOP} onCambio={(v) => setLogistica({ valorDOP: v })} placeholder="0.00" />
                   </div>
                   <p style={{ fontSize: 12.5, color: "var(--ink-soft)", margin: "6px 0 0" }}>
                     Se convierte a USD con la tasa RD$ del día al generar la cotización: {fmtUSD(quote.logisticaTotal)}
@@ -965,7 +1067,7 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
                   <h2><Percent size={16} /> Margen de gestión</h2>
                   <div className="cot-field" style={{ maxWidth: 260 }}>
                     <label>Margen por producto (USD)</label>
-                    <input type="number" min="0" step="0.01" value={margenUSD} onChange={(e) => setMargenUSD(Number(e.target.value))} />
+                    <CampoNumero min="0" step="0.01" valor={margenUSD} onCambio={setMargenUSD} placeholder="0.00" />
                   </div>
                   <p style={{ fontSize: 12.5, color: "var(--ink-soft)", margin: "6px 0 0" }}>
                     Se pone una sola vez y se suma automáticamente a cada producto de la cotización, en USD.
@@ -981,7 +1083,7 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
                         <input type="checkbox" checked={t.activo} onChange={(e) => updateImpuesto(t.id, { activo: e.target.checked })} />
                       </label>
                       <input type="text" value={t.nombre} onChange={(e) => updateImpuesto(t.id, { nombre: e.target.value })} />
-                      <input type="number" min="0" step="0.01" value={t.porcentaje} onChange={(e) => updateImpuesto(t.id, { porcentaje: Number(e.target.value) })} />
+                      <CampoNumero min="0" step="0.01" valor={t.porcentaje} onCambio={(v) => updateImpuesto(t.id, { porcentaje: v })} />
                       <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>%</span>
                       <button className="cot-iconbtn" onClick={() => removeImpuesto(t.id)} title="Eliminar impuesto"><Trash2 size={14} /></button>
                     </div>
@@ -1020,7 +1122,7 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
                     )}
                     <div className="cot-field">
                       <label>Vigencia (días desde hoy)</label>
-                      <input type="number" min="1" value={cliente.vigenciaDias} onChange={(e) => setCliente({ ...cliente, vigenciaDias: Number(e.target.value) })} />
+                      <CampoNumero min="1" valor={cliente.vigenciaDias} onCambio={(v) => setCliente((prev) => ({ ...prev, vigenciaDias: v }))} />
                     </div>
                   </div>
                   <div className="cot-field">
@@ -1029,8 +1131,12 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
                   </div>
                 </div>
 
-                <button className="cot-primary-btn" onClick={generar}>
-                  Generar cotización <ChevronRight size={16} />
+                <button className="cot-primary-btn" onClick={generar} disabled={obteniendoNumero}>
+                  {obteniendoNumero ? (
+                    <><Loader2 size={16} className="cot-spin" /> Generando…</>
+                  ) : (
+                    <>Generar cotización <ChevronRight size={16} /></>
+                  )}
                 </button>
               </div>
 
