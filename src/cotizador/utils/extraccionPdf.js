@@ -167,7 +167,11 @@ export async function leerLineasPDF(pdfjsLib, datos) {
           sig &&
           parseNumero(sig.str) !== null &&
           sig.x - (p.x + p.w) < umbral;
-        if (ult && hueco < umbral && !dosNumeros && !prefijoDeSiguiente) {
+        // Una marca de una sola letra en la columna de ITBIS ("E" exento,
+        // "G" gravado) seguida del total no forma parte de esa cifra.
+        const marcaAntesDeCifra =
+          ult && /^[A-Za-z*]$/.test(ult.texto.trim()) && parseNumero(p.str) !== null;
+        if (ult && hueco < umbral && !dosNumeros && !prefijoDeSiguiente && !marcaAntesDeCifra) {
           ult.texto += (hueco > p.h * 0.15 ? " " : "") + p.str;
           ult.right = Math.max(ult.right, p.x + p.w);
           ult.ultimaPieza = p.str;
@@ -201,9 +205,10 @@ export async function leerLineasPDF(pdfjsLib, datos) {
 const TIPOS_COLUMNA = [
   // El orden importa: se toma el primer tipo que coincide.
   { tipo: "precio", re: /(precio|p\.?\s?unit|unitario|price|valor unit|costo unit|p\/u|\bp\.u\b|rate)/ },
-  { tipo: "cantidad", re: /^(cant|qty|quantity|cantidad|uds?\b|und?s?\b)/ },
+  { tipo: "cantidad", re: /^(cant|qty|quantity|cantidad|ctd|uds?\b|und?s?\b|unid(ad|ades)?\b)/ },
   { tipo: "total", re: /^(total|importe|monto|amount|valor\b|subtotal|sub-total|line total)/ },
-  { tipo: "desc", re: /^(descripcion|description|concepto|articulo|producto|detalle|item\b|servicio|material|mercancia|nombre)/ },
+  // Presentación y concentración (medicamentos) se suman a la descripción.
+  { tipo: "desc", re: /^(descripcion|description|concepto|articulo|producto|detalle|item\b|servicio|material|mercancia|nombre|presentacion|concentracion|forma farm)/ },
 ];
 
 function clasificarEncabezado(texto) {
@@ -224,7 +229,21 @@ function detectarEncabezado(linea) {
   return columnas;
 }
 
-const RE_PIE = /^(sub\s?-?total|total\b|itbis|i\.t\.b\.i\.s|impuesto|iva\b|descuento|neto|gran total|monto total|total a pagar|balance|condiciones|observacion|nota[s]?\b|forma de pago|metodo de pago|firma|gracias|validez|vigencia|banco|cuenta|son:|pagina \d|subtotal)/;
+const RE_PIE = /^(sub\s?-?total|total\b|itbis|i\.t\.b\.i\.s|impuesto|iva\b|descuento|neto|gran total|monto total|total a pagar|balance|condiciones|observacion|nota[s]?\b|forma de pago|metodo de pago|firma|gracias|validez|vigencia|banco|cuenta|son:|subtotal)/;
+
+// Líneas de paginación ("Página 2 de 35", "Van", "Vienen"…). No cierran la
+// tabla: en documentos largos la tabla sigue en la página siguiente, a veces
+// sin repetir el encabezado.
+const RE_PAGINACION = /\b(p[aá]gina|page|p[aá]g\.?)\s*\d+\s*(de|of|\/)\s*\d+\b|^(p[aá]gina|page|p[aá]g\.?)\s*\d+$|^(van|vienen|pasan|vienen de|van a|transporte|a la vuelta|continua(cion)?|continued)\b/i;
+
+function esPaginacion(linea) {
+  return RE_PAGINACION.test(norm(linea.texto)) || RE_PAGINACION.test(linea.texto.trim());
+}
+
+// Datos de encabezado de página (empresa, RNC, teléfono, fecha, dirección) que
+// se repiten arriba de cada página. Solo se filtran al retomar la tabla en una
+// página nueva, antes del primer renglón válido.
+const RE_RUIDO = /(rnc|ncf|tel[eé]fono|\btel\b|fecha|date|www\.|@|c\/|calle|av\.|avenida|p[aá]gina|no\.\s?\d)/i;
 
 function esPie(linea) {
   const primera = linea.celdas[0] ? norm(linea.celdas[0].texto) : "";
@@ -388,33 +407,50 @@ export function analizarLineas(lineas) {
   const items = [];
   let desajustes = 0;
   let subtotalDoc = null;
+  let paginaActual = null;
+  // "tentativo": la tabla se retomó en una página nueva sin encabezado. Hasta el
+  // primer renglón válido se descartan los datos de encabezado de página y solo
+  // se aceptan renglones que cuadran, para no confundir texto con productos.
+  let tentativo = false;
 
   for (const linea of lineas) {
-    // Subtotal / total del documento (para cuadrar al final).
+    if (linea.pagina !== paginaActual) {
+      paginaActual = linea.pagina;
+      if (columnas) {
+        enTabla = true;
+        tentativo = true;
+      }
+    }
+
+    // Subtotal / total del documento (para cuadrar al final). Se queda con el
+    // último: en documentos de varias páginas el subtotal final va al cierre.
     const etiqueta = linea.celdas[0] ? norm(linea.celdas[0].texto) : "";
     if (/^sub\s?-?total/.test(etiqueta) || /^sub\s?-?total/.test(norm(linea.texto))) {
       const n = numeroDeLinea(linea);
-      if (n !== null && subtotalDoc === null) subtotalDoc = n;
+      if (n !== null) subtotalDoc = n;
     }
 
     const encabezado = detectarEncabezado(linea);
     if (encabezado) {
       columnas = encabezado;
       enTabla = true;
+      tentativo = false;
       tablaEncontrada = true;
       continue;
     }
     if (!enTabla || !columnas) continue;
+    if (esPaginacion(linea)) continue;
 
     if (esPie(linea)) {
       enTabla = false;
       continue;
     }
+    if (tentativo && RE_RUIDO.test(linea.texto)) continue;
 
     const r = leerRenglon(linea, columnas);
 
     // Línea de continuación de la descripción (sin números).
-    if (r.numerosSueltos.length === 0 && r.descripcion && items.length) {
+    if (r.numerosSueltos.length === 0 && r.descripcion && items.length && !tentativo) {
       const ult = items[items.length - 1];
       if (ult.pagina === linea.pagina && ult.y - linea.y < 40) {
         ult.descripcion = `${ult.descripcion} ${r.descripcion}`.replace(/\s+/g, " ").trim();
@@ -433,6 +469,12 @@ export function analizarLineas(lineas) {
     if (cantidad === null && precio > 0) cantidad = 1;
 
     if (!r.descripcion || !(precio > 0) || !(cantidad > 0)) continue;
+    if (tentativo) {
+      const confiable =
+        total !== null ? cuadra(cantidad, precio, total) : r.cantidad !== null && r.precio !== null;
+      if (!confiable) continue;
+      tentativo = false;
+    }
     if (total !== null && !cuadra(cantidad, precio, total)) {
       // Puede que las columnas estén corridas: se prueba con los números del renglón.
       let corregido = false;
@@ -463,9 +505,8 @@ export function analizarLineas(lineas) {
   // --- Respaldo: sin encabezado, se detectan renglones por su formato ------
   let modoRespaldo = false;
   if (items.length === 0) {
-    const RE_RUIDO = /(rnc|ncf|tel[eé]fono|\btel\b|fecha|date|www\.|@|c\/|calle|av\.|avenida|p[aá]gina|no\.\s?\d)/i;
     for (const linea of lineas) {
-      if (esPie(linea) || RE_RUIDO.test(linea.texto)) continue;
+      if (esPie(linea) || esPaginacion(linea) || RE_RUIDO.test(linea.texto)) continue;
       const celdas = linea.celdas;
       let i = celdas.length;
       const nums = [];
