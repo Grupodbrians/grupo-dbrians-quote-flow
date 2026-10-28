@@ -12,11 +12,88 @@
 
 import { fmtFechaLegible, addDaysISO } from "./formato.js";
 
-export function telefonoParaWhatsApp(telefono) {
-  const digits = String(telefono || "").replace(/\D/g, "");
-  if (!digits) return "";
-  if (digits.length === 10) return `1${digits}`;
-  return digits;
+// Países para el selector del teléfono del cliente. `largo` es la cantidad de
+// dígitos del número nacional (sin el código), para validar y para reconocer
+// un número que ya trae el código. Cualquier otro país se escribe con "+".
+export const PAISES_WHATSAPP = [
+  { codigo: "53", nombre: "Cuba", largo: [8, 8] },
+  { codigo: "1", nombre: "Rep. Dominicana / EE. UU. / Canadá / Puerto Rico", largo: [10, 10] },
+  { codigo: "34", nombre: "España", largo: [9, 9] },
+  { codigo: "52", nombre: "México", largo: [10, 10] },
+  { codigo: "57", nombre: "Colombia", largo: [10, 10] },
+  { codigo: "58", nombre: "Venezuela", largo: [10, 10] },
+  { codigo: "509", nombre: "Haití", largo: [8, 8] },
+  { codigo: "507", nombre: "Panamá", largo: [7, 8] },
+  { codigo: "506", nombre: "Costa Rica", largo: [8, 8] },
+  { codigo: "502", nombre: "Guatemala", largo: [8, 8] },
+  { codigo: "503", nombre: "El Salvador", largo: [8, 8] },
+  { codigo: "504", nombre: "Honduras", largo: [8, 8] },
+  { codigo: "505", nombre: "Nicaragua", largo: [8, 8] },
+  { codigo: "51", nombre: "Perú", largo: [9, 9] },
+  { codigo: "593", nombre: "Ecuador", largo: [9, 9] },
+  { codigo: "591", nombre: "Bolivia", largo: [8, 8] },
+  { codigo: "56", nombre: "Chile", largo: [9, 9] },
+  { codigo: "54", nombre: "Argentina", largo: [10, 11] },
+  { codigo: "598", nombre: "Uruguay", largo: [8, 9] },
+  { codigo: "595", nombre: "Paraguay", largo: [9, 9] },
+  { codigo: "55", nombre: "Brasil", largo: [10, 11] },
+  { codigo: "44", nombre: "Reino Unido", largo: [10, 10] },
+  { codigo: "33", nombre: "Francia", largo: [9, 9] },
+  { codigo: "39", nombre: "Italia", largo: [9, 11], conCero: true },
+  { codigo: "49", nombre: "Alemania", largo: [10, 11] },
+  { codigo: "351", nombre: "Portugal", largo: [9, 9] },
+  { codigo: "31", nombre: "Países Bajos", largo: [9, 9] },
+  { codigo: "41", nombre: "Suiza", largo: [9, 9] },
+  { codigo: "7", nombre: "Rusia", largo: [10, 10] },
+  { codigo: "86", nombre: "China", largo: [11, 11] },
+  { codigo: "91", nombre: "India", largo: [10, 10] },
+];
+
+// Código por defecto: el de República Dominicana, como siempre.
+export const CODIGO_PAIS_DEFECTO = "1";
+
+// Devuelve { numero, error }: `numero` es el teléfono completo en formato
+// internacional, solo dígitos (lo que pide wa.me).
+// - Si se escribe con "+" o "00" delante, se usa tal cual (cualquier país).
+// - Si no, se le pone el código del país elegido, salvo que ya lo traiga.
+export function telefonoParaWhatsApp(telefono, codigoPais = CODIGO_PAIS_DEFECTO) {
+  const texto = String(telefono || "").trim();
+  let digits = texto.replace(/\D/g, "");
+  if (!digits) return { numero: "", error: "vacio" };
+
+  if (texto.startsWith("+") || digits.startsWith("00")) {
+    if (digits.startsWith("00")) digits = digits.slice(2);
+    if (digits.length < 8 || digits.length > 15) return { numero: "", error: "invalido" };
+    return { numero: digits, error: "" };
+  }
+
+  const codigo = String(codigoPais || CODIGO_PAIS_DEFECTO).replace(/\D/g, "");
+  const pais = PAISES_WHATSAPP.find((p) => p.codigo === codigo);
+  const [min, max] = pais ? pais.largo : [6, 14];
+  const cabe = (n) => n >= min && n <= max;
+
+  // Ya trae el código del país (ej. 5352345678 con Cuba).
+  if (digits.startsWith(codigo) && cabe(digits.length - codigo.length) && !cabe(digits.length)) {
+    return { numero: digits, error: "" };
+  }
+  // Prefijo nacional "0" (ej. 0612345678 en Francia), que no se marca desde fuera.
+  if (digits.startsWith("0") && !(pais && pais.conCero)) digits = digits.slice(1);
+  if (!cabe(digits.length)) {
+    return { numero: "", error: "largo", pais, largo: [min, max] };
+  }
+  return { numero: codigo + digits, error: "" };
+}
+
+// Teléfono como se muestra en la cotización: con el código del país.
+export function telefonoVisible(telefono, codigoPais) {
+  const texto = String(telefono || "").trim();
+  if (!texto) return "";
+  if (texto.startsWith("+")) return texto;
+  const { numero } = telefonoParaWhatsApp(texto, codigoPais);
+  const codigo = String(codigoPais || CODIGO_PAIS_DEFECTO);
+  if (!numero) return texto;
+  // Si ya lo escribieron con el código, solo se le pone el "+".
+  return numero === texto.replace(/\D/g, "") ? `+${texto}` : `+${codigo} ${texto}`;
 }
 
 export function construirMensajeWhatsApp({ cliente, numeroCotizacion, fecha, total }) {
@@ -62,9 +139,14 @@ export function abrirWhatsApp({ cliente, numeroCotizacion, fecha, total, setWaEr
     setWaError("La cotización todavía no está calculada. Vuelve a \"Datos\" y genera la cotización primero.");
     return;
   }
-  const telefono = telefonoParaWhatsApp(cliente.telefono);
+  const { numero: telefono, error, pais, largo } = telefonoParaWhatsApp(cliente.telefono, cliente.codigoPais);
   if (!telefono) {
-    setWaError("El número de teléfono del cliente no es válido.");
+    if (error === "largo" && pais) {
+      const digitos = largo[0] === largo[1] ? `${largo[0]}` : `${largo[0]} o ${largo[1]}`;
+      setWaError(`El número para ${pais.nombre} (+${pais.codigo}) debe tener ${digitos} dígitos, sin el código del país. Revisa el teléfono del cliente o elige otro país.`);
+    } else {
+      setWaError("El número de teléfono del cliente no es válido. Si es de otro país, escríbelo con + y el código (ej. +53 5234 5678).");
+    }
     return;
   }
 
@@ -74,5 +156,5 @@ export function abrirWhatsApp({ cliente, numeroCotizacion, fecha, total, setWaEr
   const url = `https://wa.me/${telefono}?text=${encodeURIComponent(mensaje)}`;
   window.open(url, "_blank");
 
-  setWaNote("WhatsApp está listo con el mensaje preparado. Adjunta el PDF descargado y pulsa Enviar.");
+  setWaNote(`WhatsApp está listo con el mensaje preparado para +${telefono}. Adjunta el PDF descargado y pulsa Enviar. Si WhatsApp dice que el número no es válido, ese número no tiene WhatsApp.`);
 }

@@ -23,6 +23,9 @@ import { emptyItem, defaultCliente, computeQuote } from "./cotizador/utils/calcu
 import {
   construirMensajeWhatsApp as construirMensajeWhatsAppUtil,
   abrirWhatsApp as abrirWhatsAppUtil,
+  PAISES_WHATSAPP,
+  CODIGO_PAIS_DEFECTO,
+  telefonoVisible,
 } from "./cotizador/utils/whatsapp.js";
 import { generarPDFCliente as generarPDFClienteUtil } from "./cotizador/utils/pdf.js";
 import { extraerCotizacionDePDF } from "./cotizador/utils/extraccionPdf.js";
@@ -729,6 +732,10 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
           color: var(--ink-soft); font-family: var(--font-body);
         }
         .cot-toggle-group button.active { background: var(--ink); color: #f1efe6; }
+        .cot-telefono { display: flex; gap: 6px; }
+        .cot-telefono select { flex: 0 0 104px; width: 104px; min-width: 0; text-overflow: ellipsis; }
+        .cot-telefono input { flex: 1; min-width: 0; }
+        .cot-hint { font-size: 11.5px; color: var(--ink-soft); margin-top: 4px; }
         .cot-tax-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
         .cot-tax-row input[type="text"] { flex: 1; min-width: 0; }
         .cot-tax-row input[type="number"] { width: 80px; }
@@ -1119,8 +1126,26 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
                       <input value={cliente.nombre} onChange={(e) => setCliente({ ...cliente, nombre: e.target.value })} placeholder="Nombre completo o empresa" />
                     </div>
                     <div className="cot-field">
-                      <label>Teléfono</label>
-                      <input value={cliente.telefono} onChange={(e) => setCliente({ ...cliente, telefono: e.target.value })} placeholder="809-000-0000" />
+                      <label>Teléfono (WhatsApp)</label>
+                      <div className="cot-telefono">
+                        <select
+                          value={cliente.codigoPais || CODIGO_PAIS_DEFECTO}
+                          onChange={(e) => setCliente({ ...cliente, codigoPais: e.target.value })}
+                          aria-label="País"
+                        >
+                          {PAISES_WHATSAPP.map((p) => (
+                            <option key={p.codigo} value={p.codigo}>+{p.codigo} {p.nombre}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="tel"
+                          inputMode="tel"
+                          value={cliente.telefono}
+                          onChange={(e) => setCliente({ ...cliente, telefono: e.target.value })}
+                          placeholder={(cliente.codigoPais || CODIGO_PAIS_DEFECTO) === "53" ? "5234 5678" : (cliente.codigoPais || CODIGO_PAIS_DEFECTO) === "1" ? "809-000-0000" : "Número"}
+                        />
+                      </div>
+                      <div className="cot-hint">Otro país: escribe el número con + y su código (ej. +44 7700 900123).</div>
                     </div>
                   </div>
                   <div className="cot-field">
@@ -1286,7 +1311,7 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
                   <h3>Cliente</h3>
                   <div className="cot-doc-grid">
                     <div><span>Nombre</span>{cliente.nombre || "—"}</div>
-                    <div><span>Teléfono</span>{cliente.telefono || "—"}</div>
+                    <div><span>Teléfono</span>{telefonoVisible(cliente.telefono, cliente.codigoPais) || "—"}</div>
                     <div style={{ gridColumn: "1 / -1" }}><span>Dirección de envío</span>{cliente.direccion || "—"}</div>
                     <div><span>Método de pago</span>{cliente.metodoPago === "Otro" ? cliente.metodoPagoOtro : cliente.metodoPago}</div>
                     <div><span>Moneda</span>USD</div>
