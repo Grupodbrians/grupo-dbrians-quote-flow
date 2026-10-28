@@ -700,12 +700,16 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
         /* El renglón se acomoda al ancho de su tarjeta (no al de la pantalla):
            en una laptop la tarjeta comparte espacio con el resumen. */
         .cot-card { container-type: inline-size; }
+        /* Tarjeta angosta: descripción y botón de borrar arriba; cantidad,
+           precio y moneda abajo. */
         @container (max-width: 600px) {
-          .cot-item-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1fr) auto; }
-          .cot-item-grid > .cot-field:first-child { grid-column: 1 / -1; }
-        }
-        @container (max-width: 340px) {
-          .cot-item-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+          .cot-item-grid { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.3fr) minmax(0, 0.9fr) auto; }
+          .cot-item-grid > :nth-child(1) { grid-column: 1 / 4; grid-row: 1; }
+          .cot-item-grid > :nth-child(5) { grid-column: 4; grid-row: 1; }
+          .cot-item-grid > :nth-child(2) { grid-column: 1; grid-row: 2; }
+          .cot-item-grid > :nth-child(3) { grid-column: 2; grid-row: 2; }
+          .cot-item-grid > :nth-child(4) { grid-column: 3 / 5; grid-row: 2; }
+          .cot-item { contain-intrinsic-size: auto 136px; }
         }
         .cot-item-margin { margin: 10px 0 0; padding-top: 10px; border-top: 1px dashed var(--line); max-width: 320px; }
         .cot-item-margin label { color: var(--brass-ink); }
@@ -859,7 +863,7 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
         /* Teléfono */
         @media (max-width: 640px) {
           .cot-app { border-radius: 0; border-left: none; border-right: none; }
-          .cot-body { padding: 12px 12px 56px; } /* espacio para que la marca fija no tape botones */
+          .cot-body { padding: 12px 12px 20px; }
           .cot-card { padding: 14px; }
           .cot-row.cols-2, .cot-row.cols-3 { grid-template-columns: 1fr; }
           /* 16 px evita que el iPhone haga zoom al tocar un campo. */
@@ -871,11 +875,29 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
           .cot-body .cot-doc-header h1 { font-size: 21px; }
           .cot-body .cot-doc-table { font-size: 12.5px; }
           .cot-body .cot-doc-table td, .cot-body .cot-doc-table th { padding: 6px 4px; }
-          .cot-body .cot-doc-table td:first-child { overflow-wrap: anywhere; }
+          .cot-body .cot-doc-table:not(.cot-doc-table-interno) td:first-child { overflow-wrap: anywhere; }
+          /* El desglose interno tiene 9 columnas: se desliza de lado en vez de apretarse. */
+          .cot-body .cot-doc-table-interno { min-width: 720px; }
+          .cot-body .cot-doc-table-interno td:first-child { min-width: 170px; }
           .cot-body .cot-doc-totals { width: 100%; }
-          .cot-history-item { flex-direction: column; align-items: stretch; gap: 10px; }
+          .cot-history-item { flex-direction: column; align-items: stretch; gap: 10px; padding: 12px; }
+          .cot-history-item > div { min-width: 0; overflow-wrap: anywhere; }
           .cot-upload-box { padding: 28px 16px; margin: 8px auto; }
-          .cot-badge { bottom: 8px; right: 8px; font-size: 9.5px; padding: 4px 9px; }
+          /* Todas las pestañas a la vista, sin deslizar. */
+          .cot-topbar { padding: 12px; }
+          .cot-nav {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+            gap: 6px; overflow: visible;
+          }
+          .cot-nav button {
+            flex-direction: column; justify-content: center; gap: 3px;
+            padding: 7px 4px; font-size: 12px; min-height: 48px; text-align: center;
+          }
+          /* La marca va al final de la página para no tapar campos ni botones. */
+          .cot-badge {
+            position: static; display: table; margin: 0 auto 16px; box-shadow: none;
+            font-size: 10px; padding: 5px 10px;
+          }
         }
         @media print {
           .cot-topbar, .cot-toolbar, .cot-error-box, .cot-print-hide, .cot-badge { display: none !important; }
@@ -883,8 +905,6 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
           .cot-body { padding: 0; }
         }
       `}</style>
-
-      <div className="cot-badge">Desarrollado por Grupo D'Brians SRL</div>
 
       <div className="cot-topbar">
         <div className="cot-brand">
@@ -1205,7 +1225,7 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
               <div className="cot-doc-section">
                 <h3>Artículos y costo de proveedor</h3>
                 <div style={{ overflowX: "auto" }}>
-                <table className="cot-doc-table">
+                <table className="cot-doc-table cot-doc-table-interno">
                   <thead>
                     <tr>
                       <th>Descripción</th><th className="num">Cant.</th><th className="num">P. unit. original</th>
@@ -1449,7 +1469,8 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
           </div>
         )}
       </div>
+
+      <div className="cot-badge">Desarrollado por Grupo D'Brians SRL</div>
     </div>
   );
 }
-
