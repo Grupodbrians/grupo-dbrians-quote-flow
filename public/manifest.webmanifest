@@ -1,0 +1,12 @@
+{
+  "name": "Quote Flow",
+  "short_name": "Quote Flow",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#16233a",
+  "theme_color": "#16233a",
+  "icons": [
+    { "src": "/quote-flow-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/quote-flow-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
