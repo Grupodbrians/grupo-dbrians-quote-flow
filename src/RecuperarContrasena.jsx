@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
 import { KeyRound, AlertCircle, CheckCircle2, ArrowLeft } from "lucide-react";
-import { LOGO_DATA_URI } from "./logo.js";
 import { supabase, registrarAuditoria } from "./supabaseClient.js";
 
 // Estilos compartidos por las dos pantallas de recuperación. Mantienen el mismo
@@ -15,7 +14,7 @@ const ESTILOS = `
     background: #fff; border: 1px solid #d9d4c2; border-radius: 12px; padding: 32px;
     max-width: 380px; width: 100%; box-shadow: 0 10px 30px rgba(0,0,0,0.08);
   }
-  .qf-rec-logo { display: block; height: 60px; margin: 0 auto 22px; }
+  .qf-rec-logo { display: block; width: 64px; height: 64px; margin: 0 auto 18px; }
   .qf-rec-card h1 { font-family: 'Spectral', Georgia, serif; font-size: 18px; text-align: center; color: var(--ink); margin: 0 0 8px; }
   .qf-rec-sub { font-size: 13px; color: #6b7280; text-align: center; margin: 0 0 20px; line-height: 1.45; }
   .qf-rec-field { margin-bottom: 14px; }
@@ -49,7 +48,7 @@ function Marco({ titulo, subtitulo, children }) {
     <div className="qf-rec">
       <style>{ESTILOS}</style>
       <div className="qf-rec-card">
-        <img src={LOGO_DATA_URI} alt="Grupo D'Brians" className="qf-rec-logo" />
+        <img src="/quote-flow-icon.svg" alt="Quote Flow" className="qf-rec-logo" />
         <h1>{titulo}</h1>
         {subtitulo && <p className="qf-rec-sub">{subtitulo}</p>}
         {children}

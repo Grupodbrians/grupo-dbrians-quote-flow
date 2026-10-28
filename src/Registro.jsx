@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import { UserPlus, AlertCircle, CheckCircle2, ArrowLeft } from "lucide-react";
-import { LOGO_DATA_URI } from "./logo.js";
 import { supabase } from "./supabaseClient.js";
 
 export default function Registro({ onVolver }) {
@@ -57,7 +56,7 @@ export default function Registro({ onVolver }) {
           background: #fff; border: 1px solid #d9d4c2; border-radius: 12px; padding: 32px;
           max-width: 380px; width: 100%; box-shadow: 0 10px 30px rgba(0,0,0,0.08);
         }
-        .qf-login-logo { display: block; height: 60px; margin: 0 auto 22px; }
+        .qf-login-logo { display: block; width: 64px; height: 64px; margin: 0 auto 18px; }
         .qf-login-card h1 {
           font-family: 'Spectral', Georgia, serif; font-size: 18px; text-align: center; color: var(--ink);
           margin: 0 0 22px;
@@ -93,7 +92,7 @@ export default function Registro({ onVolver }) {
         }
       `}</style>
       <div className="qf-login-card">
-        <img src={LOGO_DATA_URI} alt="Grupo D'Brians" className="qf-login-logo" />
+        <img src="/quote-flow-icon.svg" alt="Quote Flow" className="qf-login-logo" />
         <h1>Quote Flow — Nueva cuenta</h1>
 
         {exito ? (
