@@ -53,7 +53,7 @@ function Marco({ titulo, subtitulo, children }) {
         {subtitulo && <p className="qf-rec-sub">{subtitulo}</p>}
         {children}
       </div>
-      <div className="qf-rec-footer">Desarrollado por Grupo D'Brians SRL</div>
+      <div className="qf-rec-footer">Desarrollado por GDB Studio</div>
     </div>
   );
 }

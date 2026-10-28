@@ -139,7 +139,7 @@ export default function Registro({ onVolver }) {
           </>
         )}
       </div>
-      <div className="qf-login-footer">Desarrollado por Grupo D'Brians SRL</div>
+      <div className="qf-login-footer">Desarrollado por GDB Studio</div>
     </div>
   );
 }

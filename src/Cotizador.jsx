@@ -1495,7 +1495,7 @@ Reglas: "moneda" es el código ISO de 3 letras de la moneda usada en el document
         )}
       </div>
 
-      <div className="cot-badge">Desarrollado por Grupo D'Brians SRL</div>
+      <div className="cot-badge">Desarrollado por GDB Studio</div>
     </div>
   );
 }

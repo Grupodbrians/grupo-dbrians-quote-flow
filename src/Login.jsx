@@ -115,7 +115,7 @@ export default function Login({ mensajeInicial, mensajeOk, onRegistrarse, onOlvi
           . Un administrador deberá activarla.
         </p>
       </div>
-      <div className="qf-login-footer">Desarrollado por Grupo D'Brians SRL</div>
+      <div className="qf-login-footer">Desarrollado por GDB Studio</div>
     </div>
   );
 }
