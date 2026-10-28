@@ -69,6 +69,9 @@ export function parseNumero(texto) {
   return negativo ? -n : n;
 }
 
+// Número o porcentaje ("18.00", "0.00%").
+const esCifra = (t) => parseNumero(String(t).trim().replace(/%$/, "")) !== null;
+
 // pdf.js a veces entrega columnas pegadas como un solo texto
 // ("1,602.00 RD$ 48,500.00"). Si una celda contiene solo cifras (con o sin
 // símbolo de moneda) y claramente son varias, se separa en una celda por cifra.
@@ -157,7 +160,7 @@ export async function leerLineasPDF(pdfjsLib, datos) {
         const umbral = Math.max(6, p.h * 1.1);
         // Dos números seguidos son casi siempre columnas distintas aunque estén
         // muy pegadas (p. ej. ITBIS y Total): no se funden en una sola celda.
-        const dosNumeros = ult && parseNumero(ult.ultimaPieza) !== null && parseNumero(p.str) !== null;
+        const dosNumeros = ult && esCifra(ult.ultimaPieza) && esCifra(p.str);
         // Un símbolo de moneda ("RD$") seguido de una cifra es el prefijo de esa
         // cifra, no el sufijo del número anterior.
         const prefijoDeSiguiente =
@@ -204,6 +207,8 @@ export async function leerLineasPDF(pdfjsLib, datos) {
 
 const TIPOS_COLUMNA = [
   // El orden importa: se toma el primer tipo que coincide.
+  { tipo: "total", re: /^(precio|valor|importe|monto)\s*(neto|total)|^neto\b/ },
+  { tipo: "codigo", re: /^(codigo|cod\b|cod\.|code\b|ref\b|ref\.|referencia|sku)/ },
   { tipo: "precio", re: /(precio|p\.?\s?unit|unitario|price|valor unit|costo unit|p\/u|\bp\.u\b|rate)/ },
   { tipo: "cantidad", re: /^(cant|qty|quantity|cantidad|ctd|uds?\b|und?s?\b|unid(ad|ades)?\b)/ },
   { tipo: "total", re: /^(total|importe|monto|amount|valor\b|subtotal|sub-total|line total)/ },
@@ -217,11 +222,38 @@ function clasificarEncabezado(texto) {
   return "otro";
 }
 
+// Encabezados en dos o tres líneas ("Precio" / "Neto" encima y debajo de la
+// línea principal): las palabras de las líneas vecinas se suman a la columna
+// que tienen debajo o encima, o forman una columna nueva si no hay ninguna.
+function completarEncabezado(columnas, vecinas) {
+  const cols = columnas.map((c) => ({ ...c }));
+  for (const linea of vecinas) {
+    for (const celda of linea.celdas) {
+      const col = cols.find((c) => celda.x <= c.right && celda.right >= c.x);
+      if (col) {
+        col.textoCompleto = linea.y > col.y ? `${celda.texto} ${col.textoCompleto}` : `${col.textoCompleto} ${celda.texto}`;
+      } else {
+        cols.push({ ...celda, y: linea.y, textoCompleto: celda.texto });
+      }
+    }
+  }
+  return cols
+    .map((c) => ({ ...c, tipo: clasificarEncabezado(c.textoCompleto) }))
+    .sort((a, b) => a.x - b.x);
+}
+
+// Línea corta sin cifras justo encima o debajo del encabezado.
+function esParteDeEncabezado(linea, encabezado) {
+  if (!linea || linea.pagina !== encabezado.pagina) return false;
+  if (Math.abs(linea.y - encabezado.y) > 14) return false;
+  return linea.celdas.length <= 4 && linea.celdas.every((c) => parseNumero(c.texto) === null && c.texto.length <= 20);
+}
+
 // Una línea es el encabezado de la tabla si trae un precio y además cantidad o
 // descripción.
 function detectarEncabezado(linea) {
   if (linea.celdas.length < 3) return null;
-  const columnas = linea.celdas.map((c) => ({ ...c, tipo: clasificarEncabezado(c.texto) }));
+  const columnas = linea.celdas.map((c) => ({ ...c, y: linea.y, textoCompleto: c.texto, tipo: clasificarEncabezado(c.texto) }));
   const tipos = new Set(columnas.map((c) => c.tipo));
   if (!tipos.has("precio")) return null;
   if (!tipos.has("cantidad") && !tipos.has("desc")) return null;
@@ -291,10 +323,32 @@ function leerRenglon(linea, columnas) {
   // demás columnas (código, unidad, etc.) no se mezcla con la descripción.
   const hayColumnaDesc = columnas.some((c) => c.tipo === "desc");
 
+  const colDesc = columnas.find((c) => c.tipo === "desc");
+  const colCodigo = columnas.find((c) => c.tipo === "codigo");
+
   for (const celda of linea.celdas) {
     const col = columnaMasCercana(celda, columnas);
-    const tipoCol = col ? col.tipo : "otro";
+    let tipoCol = col ? col.tipo : "otro";
     const valor = valorNumericoCelda(celda, tipoCol === "cantidad");
+
+    // Código y descripción pegados en una sola celda ("108883 ACICLOVIR CREMA"):
+    // si el texto se extiende hacia la columna de descripción (más allá de la
+    // mitad del espacio entre su columna y la de descripción), es descripción;
+    // el código del proveedor se quita.
+    const haciaDesc =
+      colDesc &&
+      (celda.x <= colDesc.right && celda.right >= colDesc.x
+        ? true
+        : col && celda.x < colDesc.x && celda.right > (col.right + colDesc.x) / 2);
+    if (valor === null && (tipoCol === "desc" || haciaDesc)) {
+      let texto = celda.texto;
+      if (colCodigo && colDesc && celda.x < colDesc.x && celda.x <= colCodigo.right) {
+        const [primero, ...resto] = texto.split(" ");
+        if (resto.length && /\d/.test(primero)) texto = resto.join(" ");
+      }
+      partesDesc.push(texto);
+      continue;
+    }
 
     if (valor !== null && tipoCol !== "desc") {
       numerosSueltos.push(valor);
@@ -413,7 +467,13 @@ export function analizarLineas(lineas) {
   // se aceptan renglones que cuadran, para no confundir texto con productos.
   let tentativo = false;
 
-  for (const linea of lineas) {
+  const subtotales = []; // { indice, valor }
+  const consumidas = new Set(); // líneas que son parte de un encabezado de varias líneas
+  let descPendiente = ""; // primera parte de una descripción partida, para el renglón siguiente
+
+  for (let indice = 0; indice < lineas.length; indice++) {
+    const linea = lineas[indice];
+    if (consumidas.has(indice)) continue;
     if (linea.pagina !== paginaActual) {
       paginaActual = linea.pagina;
       if (columnas) {
@@ -422,17 +482,24 @@ export function analizarLineas(lineas) {
       }
     }
 
-    // Subtotal / total del documento (para cuadrar al final). Se queda con el
-    // último: en documentos de varias páginas el subtotal final va al cierre.
+    // Subtotal del documento (para cuadrar al final). Ver más abajo cómo se
+    // combinan varios ("Sub-Total (Gravable)" + "Sub-Total (Exento)").
     const etiqueta = linea.celdas[0] ? norm(linea.celdas[0].texto) : "";
     if (/^sub\s?-?total/.test(etiqueta) || /^sub\s?-?total/.test(norm(linea.texto))) {
       const n = numeroDeLinea(linea);
-      if (n !== null) subtotalDoc = n;
+      if (n !== null) subtotales.push({ indice, valor: n });
     }
 
     const encabezado = detectarEncabezado(linea);
     if (encabezado) {
-      columnas = encabezado;
+      const vecinas = [];
+      for (const j of [indice - 1, indice + 1]) {
+        if (esParteDeEncabezado(lineas[j], linea)) {
+          vecinas.push(lineas[j]);
+          consumidas.add(j);
+        }
+      }
+      columnas = vecinas.length ? completarEncabezado(encabezado, vecinas) : encabezado;
       enTabla = true;
       tentativo = false;
       tablaEncontrada = true;
@@ -449,13 +516,27 @@ export function analizarLineas(lineas) {
 
     const r = leerRenglon(linea, columnas);
 
-    // Línea de continuación de la descripción (sin números).
-    if (r.numerosSueltos.length === 0 && r.descripcion && items.length && !tentativo) {
+    // Línea de continuación de la descripción (sin números). Va con el renglón
+    // más cercano: el anterior, o el siguiente cuando la descripción larga está
+    // partida en dos líneas, una encima y otra debajo de las cifras.
+    if (r.numerosSueltos.length === 0 && r.descripcion && !tentativo) {
       const ult = items[items.length - 1];
-      if (ult.pagina === linea.pagina && ult.y - linea.y < 40) {
+      const distAnterior = ult && ult.pagina === linea.pagina ? ult.y - linea.y : Infinity;
+      const sig = lineas[indice + 1];
+      const distSiguiente =
+        sig && sig.pagina === linea.pagina && !esPie(sig) && leerRenglon(sig, columnas).numerosSueltos.length
+          ? linea.y - sig.y
+          : Infinity;
+      if (distSiguiente < distAnterior && distSiguiente < 12) {
+        descPendiente = `${descPendiente} ${r.descripcion}`.trim();
+      } else if (distAnterior < 40) {
         ult.descripcion = `${ult.descripcion} ${r.descripcion}`.replace(/\s+/g, " ").trim();
       }
       continue;
+    }
+    if (descPendiente) {
+      r.descripcion = `${descPendiente} ${r.descripcion}`.replace(/\s+/g, " ").trim();
+      descPendiente = "";
     }
 
     let { cantidad, precio, total } = r;
@@ -475,7 +556,12 @@ export function analizarLineas(lineas) {
       if (!confiable) continue;
       tentativo = false;
     }
-    if (total !== null && !cuadra(cantidad, precio, total)) {
+    // Total del renglón con impuesto incluido (p. ej. ITBIS 18% en una columna):
+    // el precio unitario leído ya es el precio sin impuesto, que es el que se usa.
+    const conImpuesto =
+      total !== null &&
+      r.numerosSueltos.some((t) => t > 0 && t <= 30 && cuadra(cantidad, precio * (1 + t / 100), total));
+    if (total !== null && !conImpuesto && !cuadra(cantidad, precio, total)) {
       // Puede que las columnas estén corridas: se prueba con los números del renglón.
       let corregido = false;
       const n = r.numerosSueltos;
@@ -500,6 +586,14 @@ export function analizarLineas(lineas) {
       pagina: linea.pagina,
       y: linea.y,
     });
+  }
+
+  // El subtotal del documento es el último grupo de líneas "Subtotal" seguidas;
+  // si son varias (gravable + exento), se suman.
+  if (subtotales.length) {
+    const grupo = [subtotales[subtotales.length - 1]];
+    for (let i = subtotales.length - 2; i >= 0 && grupo[0].indice - subtotales[i].indice <= 2; i--) grupo.unshift(subtotales[i]);
+    subtotalDoc = grupo.reduce((s, g) => s + g.valor, 0);
   }
 
   // --- Respaldo: sin encabezado, se detectan renglones por su formato ------
@@ -543,8 +637,13 @@ export function analizarLineas(lineas) {
     if (desajustes > 0) {
       avisos.push(`${desajustes} renglón(es) no cuadran (cantidad × precio ≠ total del renglón). Revísalos.`);
     }
-    // Comparar con el subtotal impreso en el documento.
-    const sumaRenglones = items.reduce((s, it) => s + (it.total > 0 ? it.total : it.cantidad * it.precioUnitario), 0);
+    // Comparar con el subtotal impreso en el documento. Según el proveedor, el
+    // subtotal es la suma de los totales de renglón (con descuentos) o la suma de
+    // cantidad × precio (cuando el total del renglón ya incluye el impuesto).
+    const sumaTotales = items.reduce((s, it) => s + (it.total > 0 ? it.total : it.cantidad * it.precioUnitario), 0);
+    const sumaPrecios = items.reduce((s, it) => s + it.cantidad * it.precioUnitario, 0);
+    const cercana = (v) => subtotalDoc !== null && Math.abs(v - subtotalDoc) <= Math.max(0.05, subtotalDoc * 0.005);
+    const sumaRenglones = cercana(sumaPrecios) && !cercana(sumaTotales) ? sumaPrecios : sumaTotales;
     if (subtotalDoc !== null && subtotalDoc > 0) {
       const dif = Math.abs(sumaRenglones - subtotalDoc);
       if (dif <= Math.max(0.05, subtotalDoc * 0.005)) {
